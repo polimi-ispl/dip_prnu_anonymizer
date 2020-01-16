@@ -7,12 +7,16 @@
           <mappings>
             <mapping deploy="/dip_prnu_anonymizer" local="$PROJECT_DIR$" web="/" />
           </mappings>
+          <excludedPaths>
+            <excludedPath path="/dip_prnu_anonymizer/.ipynb_checkpoints" />
+            <excludedPath path="/dip_prnu_anonymizer/utils/__pycache__" />
+          </excludedPaths>
         </serverdata>
       </paths>
       <paths name="hack">
         <serverdata>
           <mappings>
-            <mapping deploy="/dip_prnu_anonymizer" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="dip_prnu_anonymizer" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

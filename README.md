@@ -1,2 +1,3 @@
-# dip_prnu_anonymizer
-PRNU Anonymizer through Deep Image Prior
+# PRNU Anonymizer through Deep Image Prior
+
+@Author: Francesco Picetti - francesco.picetti@polimi.it
