@@ -50,8 +50,10 @@ class UNet(nn.Module):
             act_fun = nn.ReLU()
         elif activation == "Tanh":
             act_fun = nn.Tanh()
+        elif activation == "LeakyReLU":
+            act_fun = nn.LeakyReLU(0.2, inplace=True)
         else:
-            raise ValueError("Activation has to be in [ReLU, Tanh]")
+            raise ValueError("Activation has to be in [ReLU, Tanh, LeakyReLU]")
         
         self.start = unetConv2(num_input_channels, filters[0] if not concat_x else filters[0] - num_input_channels,
                                norm_layer, need_bias, pad, act_fun)

@@ -133,22 +133,6 @@ def snr(target, output):
     return 20*np.log10(np.linalg.norm(target) / np.linalg.norm(target-output))
 
 
-def ssim(target, output):
-    """
-    Compute the Structural Similarity between the output and the target images
-    
-    :param target: image 1
-    :param output: image 2
-    :return: SSIM value (0 - 1)
-    """
-    if target.size != output.size:
-        raise ValueError('The two images must have the same dimension!')
-    if target.nbytes != output.nbytes:
-        raise ValueError('The two images must have the same bit-depth!')
-
-    return compare_ssim(target, output)
-
-
 def clip_normalize_power(x, mymin, mymax, p):
     """
     Preprocessing function to be applied to migrated images in the C2F scenario
@@ -283,10 +267,10 @@ def extract_prnu(img):
 
 
 def ncc(target, output):
-    return np.dot(target.ravel(), output.ravel()) / (np.linalg.norm(target) * np.linalg.norm(output))
+    return np.abs(np.dot(target.ravel(), output.ravel()) / (np.linalg.norm(target) * np.linalg.norm(output)))
 
 
-def compute_ssim(target, output):
+def ssim(target, output):
     return compare_ssim(target, output, multichannel=True if target.shape[-1] == 3 else False)
 
 
