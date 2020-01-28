@@ -14,6 +14,7 @@ from GPUtil import getFirstAvailable, getGPUs
 from termcolor import colored
 
 from . import prnu
+from . import pytorch_ssim
 
 
 def set_data_path(host='polimi'):
@@ -258,20 +259,39 @@ def add_prnu(img, k, weight=0.01, to_each_channel=True):
         raise NotImplementedError("For now the PRNU is added to each channel")
 
 
-def psnr(target, output):
-    return 10 * np.log10(255**2 / np.mean((target - output) ** 2))
+def psnr(img1: torch.Tensor or np.ndarray, img2: torch.Tensor or np.ndarray, color_channel:int=-1) -> torch.Tensor or \
+                                                                                              np.ndarray:
+    if isinstance(img1, np.ndarray) and isinstance(img2, np.ndarray):
+        return 10 * np.log10(255 ** 2 / np.mean((img1 - img2) ** 2))
+    else:
+        if color_channel != -1:
+            img1 = img1.permute(0,2,3,1)
+            img2 = img2.permute(0,2,3,1)
+        return 10 * torch.log10(255 ** 2 / torch.mean((img1 - img2).view(-1) ** 2))
 
 
 def extract_prnu(img):
     return prnu.extract_single(float2png(img))
 
 
-def ncc(target, output):
-    return np.abs(np.dot(target.ravel(), output.ravel()) / (np.linalg.norm(target) * np.linalg.norm(output)))
+def ncc(k1: torch.Tensor or np.ndarray, k2: torch.Tensor or np.ndarray) -> float:
+    if isinstance(k1, np.ndarray) and isinstance(k2, np.ndarray):
+        return np.abs(np.dot(k1.ravel(), k2.ravel()) / (np.linalg.norm(k1) * np.linalg.norm(k2)))
+    else:
+        k1 = k1.view(-1, 1)
+        k2 = k2.view(-1, 1)
+        k1_norm = torch.norm(k1, 2)
+        k2_norm = torch.norm(k2, 2)
+        _ncc = torch.sum(k1 * k2)
+        _ncc = _ncc / (k1_norm * k2_norm + np.finfo(float).eps)
+        return torch.abs(_ncc)
 
 
-def ssim(target, output):
-    return compare_ssim(target, output, multichannel=True if target.shape[-1] == 3 else False)
+def ssim(img1: torch.Tensor or np.ndarray, img2: torch.Tensor or np.ndarray) -> torch.Tensor or np.ndarray:
+    if isinstance(img1, np.ndarray) and isinstance(img2, np.ndarray):
+        return compare_ssim(img1, img2, multichannel=True if img1.shape[-1] == 3 else False)
+    else:
+        return pytorch_ssim.ssim(img1, img2)
 
 
 def torch2numpy(in_content):
@@ -290,3 +310,28 @@ def float2png(in_content):
 
 def png2float(in_content):
     return in_content.astype(np.float32) / 255.
+
+
+def rgb2gray(in_content: np.ndarray or torch.Tensor, color_channel:int=-1):
+    if isinstance(in_content, np.ndarray):
+        return prnu.rgb2gray(in_content)  # TODO handle the color channel
+
+    rgb2gray_vector = torch.Tensor([0.29893602, 0.58704307, 0.11402090]).type(in_content.dtype).to(in_content.device)
+
+    ndim = len(in_content.shape)
+
+    if color_channel != -1:
+        in_content = in_content.permute(0, 2, 3, 1)
+
+    if ndim == 3:
+        im_gray = in_content.clone()
+    elif in_content.shape[-1] == 1:
+        im_gray = in_content.clone()
+    elif in_content.shape[-1] == 3:
+        w, h = in_content.shape[1:3]
+        im = in_content.reshape(w*h, 3)
+        im_gray = (im @ rgb2gray_vector).reshape(w, h)
+    else:
+        raise ValueError('Input image must have 1 or 3 channels')
+
+    return im_gray[None, None, :, :]

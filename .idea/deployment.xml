@@ -11,6 +11,22 @@
             <excludedPath path="/dip_prnu_anonymizer/.ipynb_checkpoints" />
             <excludedPath path="/dip_prnu_anonymizer/utils/__pycache__" />
             <excludedPath path="/dip_prnu_anonymizer/models/__pycache__" />
+            <excludedPath local="true" path="$PROJECT_DIR$/literature" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
+      <paths name="cineca">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/dip_prnu_anonymizer" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath local="true" path="$PROJECT_DIR$/literature" />
+            <excludedPath path="./results" />
+            <excludedPath path="/dip_prnu_anonymizer/dataset" />
+            <excludedPath path="/dip_prnu_anonymizer/__pycache__" />
+            <excludedPath path="/dip_prnu_anonymizer/results" />
+            <excludedPath local="true" path="$PROJECT_DIR$/models" />
           </excludedPaths>
         </serverdata>
       </paths>

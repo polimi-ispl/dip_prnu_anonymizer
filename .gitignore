@@ -1,4 +1,4 @@
-# General
-.DS_Store
-\.idea
-\dataset
+*.DS_Store
+.idea/
+dataset/
+literature/
