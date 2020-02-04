@@ -158,24 +158,25 @@ class Training:
 
         print(colored(msg, 'yellow'), '\r', end='')
 
-        # # save every N iterations
-        # if self.args.save_every != 0 and self.iiter % self.args.save_every == 0:
-        #     outname = self.image_name + \
-        #               '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-        #               '_psnr%.2f.png' % self.history.psnr[-1]
-        #     Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
-
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history.psnr[-1]:
             self.psnr_max = self.history.psnr[-1]
-            self.out_img = out_img
             if self.psnr_max > self.args.psnr_min and \
                     self.iiter > 0 and self.saving_interval >= self.args.save_every:
+                self.out_img = out_img
                 outname = self.image_name + \
                           '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
                           '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_d[-1])
                 Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
                 self.saving_interval = 0
+
+        # save last image if none of the above conditions are respected
+        if self.out_img is None and self.iiter == self.args.epochs:
+            self.out_img = out_img
+            outname = self.image_name + \
+                      '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
+                      '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_d[-1])
+            Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
 
         self.iiter += 1
         self.saving_interval += 1
@@ -193,7 +194,7 @@ class Training:
             'device': os.environ["CUDA_VISIBLE_DEVICES"],
             'elapsed time': u.sec2time(self.elapsed),
             'run_code': self.outpath[-6:],
-            'history': self.history,
+            'history': self.history._asdict(),
             'args': self.args,
             'prnu': self.prnu,
             'image': self.img,
