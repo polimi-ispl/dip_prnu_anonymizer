@@ -224,8 +224,9 @@ def main() -> int:
                         help='Device name in ./dataset/ folder')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
-    parser.add_argument('--pics_per_dev', type=int, required=False, default=-1,
-                        help='Number of pictures per device to be processed')
+    parser.add_argument('--pics_idx', nargs='+', type=int, required=False,
+                        help='indeces of the first and last pictures to be processed'
+                             '(e.g. 10, 15 to process images from the 10th to the 15th)')
     parser.add_argument('--outpath', type=str, required=False, default='test',
                         help='Run name in ./results/')
     # network design
@@ -292,10 +293,11 @@ def main() -> int:
     elif isinstance(args.device, str):
         device_list = [os.path.join('dataset', args.device)]
 
+    pics_idx = args.pics_idx if args.pics_idx is not None else [0, None]  # all the pictures
     for device in device_list:  # ./dataset/device
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
         T.load_prnu(device)
-        pic_list = glob(os.path.join(device, '*.png'))[:args.pics_per_dev]
+        pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
 
         for picpath in pic_list:
             T.load_image(picpath)
