@@ -145,7 +145,7 @@ class Training:
         self.history.loss.append(total_loss.item())
         self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
         self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
-        msg = "Processing %s,\tIter %s, Loss = %.2e, PSNR = %.2f dB, SSIM = %.4f" \
+        msg = "\tPicture %s,\tIter %s, Loss = %.2e, PSNR = %.2f dB, SSIM = %.4f" \
               % (self.imgpath.split('/')[-1], str(self.iiter+1).zfill(u.ten_digit(self.args.epochs)),
                  self.history.loss[-1], self.history.psnr[-1], self.history.ssim[-1])
 
@@ -293,7 +293,7 @@ def main() -> int:
         device_list = [os.path.join('dataset', args.device)]
 
     for device in device_list:  # ./dataset/device
-        print(colored('Processing device %s' % device.split('/')[-1], 'yellow'))
+        print(colored('Device %s' % device.split('/')[-1], 'yellow'))
         T.load_prnu(device)
         pic_list = glob(os.path.join(device, '*.png'))[:args.pics_per_dev]
 
