@@ -63,7 +63,8 @@ class Training:
         self.parameters = None
         self.num_params = None
         self.build_model()
-        self.dncnn = DnCNN().to(self.input_tensor.device)
+        if self.args.beta != 0. or self.args.nccd:
+            self.dncnn = DnCNN().to(self.input_tensor.device)
 
     def build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -126,7 +127,8 @@ class Training:
             input_tensor = self.input_tensor_old + (self.additional_noise_tensor.normal_() * self.args.reg_noise_std)
 
         output_tensor = self.net(input_tensor)
-        w = self.dncnn(u.rgb2gray(output_tensor, 1))
+        if self.args.beta != 0. or self.args.nccd:
+            w = self.dncnn(u.rgb2gray(output_tensor, 1))
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
             total_loss = self.l2dist(output_tensor, self.img_tensor)
@@ -162,11 +164,11 @@ class Training:
         if self.psnr_max < self.history.psnr[-1]:
             self.psnr_max = self.history.psnr[-1]
             if self.psnr_max > self.args.psnr_min and \
-                    self.iiter > 0 and self.saving_interval >= self.args.save_every:
+                    self.iiter > 0 and self.saving_interval >= self.args.save_png_every:
                 self.out_img = out_img
                 outname = self.image_name + \
                           '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-                          '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_d[-1])
+                          '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_w[-1])
                 Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
                 self.saving_interval = 0
 
@@ -175,7 +177,7 @@ class Training:
             self.out_img = out_img
             outname = self.image_name + \
                       '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-                      '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_d[-1])
+                      '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_w[-1])
             Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
 
         self.iiter += 1
@@ -193,7 +195,7 @@ class Training:
             'server': u.machine_name(),
             'device': os.environ["CUDA_VISIBLE_DEVICES"],
             'elapsed time': u.sec2time(self.elapsed),
-            'run_code': self.outpath[-6:],
+            # 'run_code': self.outpath[-6:],
             'history': self.history._asdict(),
             'args': self.args,
             'prnu': self.prnu,
@@ -218,12 +220,14 @@ class Training:
 def main() -> int:
     parser = ArgumentParser()
     # dataset parameter
-    parser.add_argument('--datapath', type=str, required=False, default='./dataset/',
-                        help='Dataset path')
+    parser.add_argument('--device', type=str, required=False, default='Nikon_D70_0',
+                        help='Device name in ./dataset/ folder')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
     parser.add_argument('--pics_per_dev', type=int, required=False, default=-1,
                         help='Number of pictures per device to be processed')
+    parser.add_argument('--outpath', type=str, required=False, default='test',
+                        help='Run name in ./results/')
     # network design
     parser.add_argument('--network', type=str, required=False, default='skip',
                         help='Name of the network to be used [unet, skip]')
@@ -246,15 +250,15 @@ def main() -> int:
                         help='Optimizer to be used [adam, lbfgs, sgd]')
     parser.add_argument('--nccd', action='store_true',
                         help='Compute and save the NCC curve computed through DnCNN.')
-    parser.add_argument('--gamma', type=float, required=False, default=0.45,
+    parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
     parser.add_argument('--beta', type=float, required=False, default=0.00,
                         help='Coefficient for the DnCNN fingerprint extraction loss')
-    parser.add_argument('--epochs', '-e', type=int, required=False, default=6001,
+    parser.add_argument('--epochs', '-e', type=int, required=False, default=1501,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
                         help='Learning Rate for Adam optimizer')
-    parser.add_argument('--save_every', type=int, default=0, required=False,
+    parser.add_argument('--save_png_every', type=int, default=0, required=False,
                         help='Number of epochs every which to save the results')
     parser.add_argument('--psnr_min', type=float, default=30., required=False,
                         help='Minimum PSNR for saving the image.')
@@ -272,29 +276,25 @@ def main() -> int:
     u.set_gpu(args.gpu)
 
     # create output folder
-    outpath = os.path.join('./results/', u.random_code())
+    outpath = os.path.join('./results/', args.outpath)
     if not os.path.exists(outpath):
         os.makedirs(outpath)
     print(colored('Saving to %s' % outpath, 'yellow'))
     with open(os.path.join(outpath, 'args.txt'), 'w') as fp:
-        json.dump(args.__dict__, fp, indent=2)
+        json.dump(args.__dict__, fp, indent=4)
 
     picture_list = []
-
+    print(colored('Processing device %s' % args.device, 'yellow'))
     T = Training(args, dtype, outpath)
+    T.load_prnu(os.path.join('dataset', args.device))
+    pic_list = glob(os.path.join('dataset', args.device, '*.png'))[:args.pics_per_dev]
+    picture_list += pic_list
 
-    # process images
-    for device_path in glob(os.path.join(args.datapath, '*')):
-
-        T.load_prnu(device_path)
-        pic_list = glob(os.path.join(device_path, '*.png'))[:args.pics_per_dev]
-        picture_list += pic_list
-
-        for picpath in pic_list:
-            T.load_image(picpath)
-            T.optimize()
-            T.save_result()
-            T.clean()
+    for picpath in pic_list:
+        T.load_image(picpath)
+        T.optimize()
+        T.save_result()
+        T.clean()
 
     print(colored('Anonymization done!', 'yellow'))
 

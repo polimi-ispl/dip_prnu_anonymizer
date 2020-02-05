@@ -284,7 +284,7 @@ def ncc(k1: torch.Tensor or np.ndarray, k2: torch.Tensor or np.ndarray) -> float
         k2_norm = torch.norm(k2, 2)
         _ncc = torch.sum(k1 * k2)
         _ncc = _ncc / (k1_norm * k2_norm + np.finfo(float).eps)
-        return torch.abs(_ncc)
+        return _ncc
 
 
 def ssim(img1: torch.Tensor or np.ndarray, img2: torch.Tensor or np.ndarray) -> torch.Tensor or np.ndarray:
