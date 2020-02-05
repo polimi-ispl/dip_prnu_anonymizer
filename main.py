@@ -220,7 +220,7 @@ class Training:
 def main() -> int:
     parser = ArgumentParser()
     # dataset parameter
-    parser.add_argument('--device', type=str, required=False, default='Nikon_D70_0',
+    parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
                         help='Device name in ./dataset/ folder')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
@@ -283,18 +283,25 @@ def main() -> int:
     with open(os.path.join(outpath, 'args.txt'), 'w') as fp:
         json.dump(args.__dict__, fp, indent=4)
 
-    picture_list = []
-    print(colored('Processing device %s' % args.device, 'yellow'))
     T = Training(args, dtype, outpath)
-    T.load_prnu(os.path.join('dataset', args.device))
-    pic_list = glob(os.path.join('dataset', args.device, '*.png'))[:args.pics_per_dev]
-    picture_list += pic_list
 
-    for picpath in pic_list:
-        T.load_image(picpath)
-        T.optimize()
-        T.save_result()
-        T.clean()
+    if args.device == 'all':
+        device_list = glob('dataset/*')
+    elif isinstance(args.device, list):
+        device_list = [os.path.join('dataset', d) for d in args.device]
+    elif isinstance(args.device, str):
+        device_list = [os.path.join('dataset', args.device)]
+
+    for device in device_list:  # ./dataset/device
+        print(colored('Processing device %s' % device.split('/')[-1], 'yellow'))
+        T.load_prnu(device)
+        pic_list = glob(os.path.join(device, '*.png'))[:args.pics_per_dev]
+
+        for picpath in pic_list:
+            T.load_image(picpath)
+            T.optimize()
+            T.save_result()
+            T.clean()
 
     print(colored('Anonymization done!', 'yellow'))
 
