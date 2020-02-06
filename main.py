@@ -135,7 +135,6 @@ class Training:
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
             total_loss = self.l2dist(u.add_prnu(output_tensor, self.prnu_tensor, weight=self.args.gamma),
                                      self.img_tensor)
-
         if self.args.beta != 0.:  # cross-correlation between the true PRNU and the one extracted by the DnCNN
             # w = self.dncnn(u.rgb2gray(output_tensor, 1))
             total_loss += self.args.beta * u.ncc(self.prnu_tensor * u.rgb2gray(output_tensor, 1), w)

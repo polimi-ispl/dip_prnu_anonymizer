@@ -18,4 +18,6 @@
 source activate dip
 cd /gpfs/scratch/usera06ptm/a06ptm04/fpicetti/dip_prnu_anonymizer
 
-python main.py --device Nikon_D200_1 --pics_idx 66 100  --outpath default && python /galileo/home/usera06ptm/a06ptm04/fpicetti/slack.py  -m "Finished third third of Nikon_D200_1" -u francesco.picetti sara.mandelli paolo.bestagini vincenzo.lipari
+python main.py --device Nikon_D200_1 --pics_idx 66 100  --outpath default
+python /galileo/home/usera06ptm/a06ptm04/fpicetti/slack.py  -m "Finished third third of Nikon_D200_1" -u francesco.picetti sara.mandelli paolo.bestagini vincenzo.lipari
+
