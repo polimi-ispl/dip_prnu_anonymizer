@@ -276,7 +276,7 @@ def extract_prnu(img):
 
 def ncc(k1: torch.Tensor or np.ndarray, k2: torch.Tensor or np.ndarray) -> float:
     if isinstance(k1, np.ndarray) and isinstance(k2, np.ndarray):
-        return np.abs(np.dot(k1.ravel(), k2.ravel()) / (np.linalg.norm(k1) * np.linalg.norm(k2)))
+        return np.dot(k1.ravel(), k2.ravel()) / (np.linalg.norm(k1) * np.linalg.norm(k2))
     else:
         k1 = k1.view(-1, 1)
         k2 = k2.view(-1, 1)

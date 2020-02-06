@@ -13,8 +13,9 @@ cd /nas/home/fpicetti/dip_prnu_anonymizer
 #python main.py --pics_per_dev 10 --nccd --save_every 50 --filters 128 128 128 128 --skip 128 128 128 128 --gamma 0.01
 
 # new runs
-python main.py --device Nikon_D70_0 --pics_per_dev -1 --save_png_every 50 --outpath default_allpics
-
+python main.py --device Nikon_D70_0 --pics_idx 0 20 --outpath gamma0.1 --gamma .1
+python main.py --device Nikon_D70_0 --pics_idx 0 20 --outpath gamma1 --gamma 1
+python main.py --device Nikon_D70_0 --pics_idx 0 20 --outpath gamma0.001 --gamma 1e-3
 
 # # as done by Fantong
 # python main_single.py --filters 128 128 128 128 --skip 128 128 128 128 --epochs 2000 --input_depth 1024 --activation LeakyReLU --upsample bilinear
@@ -25,4 +26,4 @@ python main.py --device Nikon_D70_0 --pics_per_dev -1 --save_png_every 50 --outp
 # # using also DnCNN (add NCC between PRNU and DnCNN(output))
 # --beta 0.01
 
-python /nas/home/fpicetti/slack.py -u francesco.picetti sara.mandelli
+python /nas/home/fpicetti/slack.py -m "Gamma curve finished" -u francesco.picetti sara.mandelli paolo.bestagini vincenzo.lipari

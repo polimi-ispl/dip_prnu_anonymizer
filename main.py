@@ -163,8 +163,10 @@ class Training:
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history.psnr[-1]:
             self.psnr_max = self.history.psnr[-1]
-            if self.psnr_max > self.args.psnr_min and \
-                    self.iiter > 0 and self.saving_interval >= self.args.save_png_every:
+            if self.args.save_png_every > 0 and \
+                    self.psnr_max > self.args.psnr_min and \
+                    self.iiter > 0 \
+                    and self.saving_interval >= self.args.save_png_every:
                 self.out_img = out_img
                 outname = self.image_name + \
                           '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
@@ -217,7 +219,7 @@ class Training:
         self.history = History([], [], [], [], [])
 
 
-def main() -> int:
+def main():
     parser = ArgumentParser()
     # dataset parameter
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
