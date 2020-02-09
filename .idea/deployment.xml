@@ -12,6 +12,7 @@
             <excludedPath path="/dip_prnu_anonymizer/utils/__pycache__" />
             <excludedPath path="/dip_prnu_anonymizer/models/__pycache__" />
             <excludedPath local="true" path="$PROJECT_DIR$/literature" />
+            <excludedPath path="/dip_prnu_anonymizer/__pycache__" />
           </excludedPaths>
         </serverdata>
       </paths>
@@ -23,7 +24,6 @@
           <excludedPaths>
             <excludedPath local="true" path="$PROJECT_DIR$/literature" />
             <excludedPath path="./results" />
-            <excludedPath path="/dip_prnu_anonymizer/dataset" />
             <excludedPath path="/dip_prnu_anonymizer/__pycache__" />
             <excludedPath path="/dip_prnu_anonymizer/results" />
             <excludedPath local="true" path="$PROJECT_DIR$/models" />
