@@ -38,6 +38,7 @@ class Training:
         self.outpath = outpath
         self.img_shape = img_shape
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
+        self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
         self.history = History([], [], [], [], [])
         self.elapsed = None
         self.iiter = 0
@@ -48,31 +49,33 @@ class Training:
         self.image_name = None
         self.img = None
         self.img_tensor = None
-        self.prnu = None
-        self.prnu_tensor = None
+        self.prnu_clean = None
+        self.prnu_clean_tensor = None
+        self.prnu_4ncc = None
+        self.prnu_4ncc_tensor = None
         self.out_img = None
 
         # build input tensors
         self.input_tensor = None
         self.input_tensor_old = None
         self.additional_noise_tensor = None
-        self.build_input()
+        self._build_input()
 
         # build network
         self.net = None
         self.parameters = None
         self.num_params = None
-        self.build_model()
+        self._build_model()
         if self.args.beta != 0. or self.args.nccd:
             self.dncnn = DnCNN().to(self.input_tensor.device)
 
-    def build_input(self):
+    def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
                                       noise_type=self.args.noise_dist, var=self.args.noise_std).type(dtype)
         self.input_tensor_old = self.input_tensor.detach().clone()
         self.additional_noise_tensor = self.input_tensor.detach().clone()
 
-    def build_model(self):
+    def _build_model(self):
         if self.args.network == 'unet':
             self.net = UNet(num_input_channels=self.args.input_depth,
                             num_output_channels=self.img_shape[-1],
@@ -112,12 +115,21 @@ class Training:
         self.img_tensor = u.numpy2torch(np.swapaxes(self.img, 2, 0)[np.newaxis])
 
     def load_prnu(self, device_path):
-        self.prnu = loadmat(os.path.join(device_path, 'prnu_cropped512.mat'))['prnu']
-        if self.prnu.shape != self.img_shape[:2]:
-            raise ValueError('The loaded PRNU shape has to be', self.img_shape[:2])
-        self.prnu_tensor = u.numpy2torch(self.prnu[np.newaxis, np.newaxis])
+        # clean PRNU to be added to the output
+        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu.mat'))['prnu']
+        if self.prnu_clean.shape != self.img_shape[:2]:
+            raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
 
-    def optimization_loop(self):
+        # filtered PRNU for computing the NCC
+        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W.mat'))['prnu']
+        if self.prnu_4ncc.shape != self.img_shape[:2]:
+            raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
+
+        # create relative tensors
+        self.prnu_clean_tensor = u.numpy2torch(self.prnu_clean[np.newaxis, np.newaxis])
+        self.prnu_4ncc_tensor = u.numpy2torch(self.prnu_4ncc[np.newaxis, np.newaxis])
+
+    def _optimization_loop(self):
         if self.args.param_noise:
             for n in [x for x in self.net.parameters() if len(x.size()) == 4]:
                 n += n.detach().clone().normal_() * n.std() / 50
@@ -127,18 +139,21 @@ class Training:
             input_tensor = self.input_tensor_old + (self.additional_noise_tensor.normal_() * self.args.reg_noise_std)
 
         output_tensor = self.net(input_tensor)
+
         if self.args.beta != 0. or self.args.nccd:
             w = self.dncnn(u.rgb2gray(output_tensor, 1))
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
             total_loss = self.l2dist(output_tensor, self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
-            total_loss = self.l2dist(u.add_prnu(output_tensor, self.prnu_tensor, weight=self.args.gamma),
+            total_loss = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
                                      self.img_tensor)
         if self.args.beta != 0.:  # cross-correlation between the true PRNU and the one extracted by the DnCNN
             # w = self.dncnn(u.rgb2gray(output_tensor, 1))
-            total_loss += self.args.beta * u.ncc(self.prnu_tensor * u.rgb2gray(output_tensor, 1), w)
+            total_loss += self.args.beta * u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w)
 
+        # if self.args.alpha != 0.:
+        #     total_loss += self.kldiv(input_hist, target_hist)
         total_loss.backward()
 
         self.history.loss.append(total_loss.item())
@@ -149,12 +164,12 @@ class Training:
                  self.history.loss[-1], self.history.psnr[-1], self.history.ssim[-1])
 
         out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
-        self.history.ncc_w.append(u.ncc(self.prnu * u.float2png(u.prnu.rgb2gray(out_img)),
+        self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
                                         u.prnu.extract_single(u.float2png(out_img))))
         msg += ', NCC_w = %.6f' % self.history.ncc_w[-1]
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
-            self.history.ncc_d.append(u.ncc(self.prnu_tensor * u.rgb2gray(output_tensor, 1), w).item())
+            self.history.ncc_d.append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), w).item())
             msg += ', NCC_d = %.6f' % self.history.ncc_d[-1]
 
         print(colored(msg, 'yellow'), '\r', end='')
@@ -188,7 +203,7 @@ class Training:
 
     def optimize(self):
         start = time()
-        optimize(self.args.optimizer, self.parameters, self.optimization_loop, self.args.lr, self.args.epochs)
+        optimize(self.args.optimizer, self.parameters, self._optimization_loop, self.args.lr, self.args.epochs)
         self.elapsed = time() - start
 
     def save_result(self):
@@ -199,7 +214,7 @@ class Training:
             # 'run_code': self.outpath[-6:],
             'history': self.history._asdict(),
             'args': self.args,
-            'prnu': self.prnu,
+            'prnu': self.prnu_clean,
             'image': self.img,
             'anonymized': self.out_img,
             'psnr_max': self.psnr_max,
@@ -208,13 +223,13 @@ class Training:
         np.save(os.path.join(self.outpath,
                              self.image_name.split('/')[-1] + '_run.npy'), mydict)
 
-    def clean(self):
+    def reset(self):
         self.iiter = 0
         self.saving_interval = 0
         print('')
         torch.cuda.empty_cache()
-        self.build_input()
-        self.build_model()
+        self._build_input()
+        self._build_model()
         self.history = History([], [], [], [], [])
 
 
@@ -256,7 +271,7 @@ def main():
                         help='Coefficient for adding the PRNU')
     parser.add_argument('--beta', type=float, required=False, default=0.00,
                         help='Coefficient for the DnCNN fingerprint extraction loss')
-    parser.add_argument('--epochs', '-e', type=int, required=False, default=1501,
+    parser.add_argument('--epochs', '-e', type=int, required=False, default=3001,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
                         help='Learning Rate for Adam optimizer')
@@ -304,7 +319,7 @@ def main():
             T.load_image(picpath)
             T.optimize()
             T.save_result()
-            T.clean()
+            T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
 
