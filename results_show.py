@@ -2,6 +2,7 @@
 
 import os
 import matplotlib.pyplot as plt
+plt.style.use('ggplot')
 import numpy as np
 from scipy.io import loadmat
 from sklearn.metrics import roc_curve
@@ -10,7 +11,7 @@ from sklearn.metrics import roc_curve
 devices = ['Nikon_D200_0', 'Nikon_D200_1', 'Nikon_D70_0', 'Nikon_D70_1', 'Nikon_D70s_0', 'Nikon_D70s_1']
 
 # result folder
-output_folder = '/nas/home/smandelli/Pycharm_projects/dip_prnu_anonymizer/results/default_results'
+output_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/_evaluation/gamma0.1'
 
 psnr_min_vec = [37, 38, 39, 40]
 
@@ -69,8 +70,9 @@ for p, psnr_min in enumerate(psnr_min_vec):
     fp_rate = np.mean(fp / (fp + tn), axis=0)
 
     # final ROC curve, averaged over devices
-
-    plt.plot(fp_rate, tp_rate)
+    plt.figure(figsize=(5, 5))
+    plt.plot(fp_rate, tp_rate, lw=2)
+    plt.xlabel('FPR'), plt.ylabel('TPR')
     plt.show()
 
     tp_sort = np.sort(tp_rate)
@@ -83,3 +85,5 @@ for p, psnr_min in enumerate(psnr_min_vec):
     print('min PSNR = {}, TPR@0.01 = {}'.format(psnr_min, tpr_001))
     print('min PSNR = {}, Median PSNR [dB] = {}'.format(psnr_min, np.median(np.concatenate(psnr_vec))))
     print('min PSNR = {}, Mean PSNR [dB] = {}'.format(psnr_min, np.mean(np.concatenate(psnr_vec))))
+
+    print('0')

@@ -4,18 +4,16 @@ import os
 import matplotlib.pyplot as plt
 from glob import glob
 import numpy as np
-from collections import namedtuple
-History = namedtuple("History", ['loss', 'psnr', 'ssim', 'ncc_w', 'ncc_d'])
 from scipy.io import loadmat
 
 # devices:
 devices = ['Nikon_D200_0', 'Nikon_D200_1', 'Nikon_D70_0', 'Nikon_D70_1', 'Nikon_D70s_0', 'Nikon_D70s_1']
 
 # results folder:
-result_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/default'
+result_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/gamma0.1'
 
 # output folder
-output_folder = '/nas/home/smandelli/Pycharm_projects/dip_prnu_anonymizer/results/default_results'
+output_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/_evaluation/gamma0.1'
 
 psnr_min_vec = [37, 38, 39, 40]
 
