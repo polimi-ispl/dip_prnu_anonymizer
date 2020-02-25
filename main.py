@@ -246,8 +246,8 @@ def main():
     parser.add_argument('--outpath', type=str, required=False, default='test',
                         help='Run name in ./results/')
     # network design
-    parser.add_argument('--network', type=str, required=False, default='skip',
-                        help='Name of the network to be used [unet, skip]')
+    parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip'],
+                        help='Name of the network to be used')
     parser.add_argument('--activation', type=str, default='ReLU', required=False,
                         help='Activation function to be used in the convolution block [ReLU, Tanh, LeakyReLU]')
     parser.add_argument('--need_sigmoid', type=bool, required=False, default=True,
@@ -258,13 +258,13 @@ def main():
                         help='Number of channels for skip')
     parser.add_argument('--input_depth', type=int, required=False, default=512,
                         help='Depth of the input noise tensor')
-    parser.add_argument('--pad', type=str, required=False, default='zero',
-                        help='Padding strategy for the network [zero, reflection]')
-    parser.add_argument('--upsample', type=str, required=False, default='nearest',
-                        help='Upgoing deconvolution strategy for the network [nearest, bilinear, deconv]')
+    parser.add_argument('--pad', type=str, required=False, default='zero', choices=['zero', 'reflection'],
+                        help='Padding strategy for the network')
+    parser.add_argument('--upsample', type=str, required=False, default='nearest', choices=['nearest', 'bilinear', 'deconv'],
+                        help='Upgoing deconvolution strategy for the network')
     # training parameter
-    parser.add_argument('--optimizer', type=str, required=False, default='adam',
-                        help='Optimizer to be used [adam, lbfgs, sgd]')
+    parser.add_argument('--optimizer', type=str, required=False, default='adam', choices=['adam', 'lbfgs', 'sgd'],
+                        help='Optimizer to be used')
     parser.add_argument('--nccd', action='store_true',
                         help='Compute and save the NCC curve computed through DnCNN.')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
@@ -283,8 +283,8 @@ def main():
                         help='Add normal noise to the parameters every epoch')
     parser.add_argument('--reg_noise_std', type=float, required=False, default=0.03,
                         help='Standard deviation of the normal noise to be added to the input every epoch')
-    parser.add_argument('--noise_dist', type=str, default='uniform', required=False,
-                        help='Type of noise for the input tensor [normal, uniform]')
+    parser.add_argument('--noise_dist', type=str, default='uniform', required=False, choices=['normal', 'uniform'],
+                        help='Type of noise for the input tensor')
     parser.add_argument('--noise_std', type=float, default=.1, required=False,
                         help='Standard deviation of the noise for the input tensor')
     args = parser.parse_args()
