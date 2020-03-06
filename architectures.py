@@ -697,4 +697,24 @@ class PixelDiscriminator(nn.Module):
         """Standard forward."""
         return self.net(input)
 
+
 # TODO add a Wasserstein Discriminator
+class Wasserstein(nn.Module):
+
+    def __init__(self, dim=512):
+        super(Wasserstein, self).__init__()
+
+        main = nn.Sequential(
+            nn.Linear(2, dim),
+            nn.ReLU(True),
+            nn.Linear(dim, dim),
+            nn.ReLU(True),
+            nn.Linear(dim, dim),
+            nn.ReLU(True),
+            nn.Linear(dim, 1),
+        )
+        self.main = main
+
+    def forward(self, inputs):
+        output = self.main(inputs)
+        return output.view(-1)

@@ -17,7 +17,7 @@ dependencies:
 - scikit-learn
 - torchvision
 - termcolor
-- pillow
+- pillow=6.1
 - tqdm
 - pip:
     - gputil

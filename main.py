@@ -285,8 +285,10 @@ def main():
                         help='Coefficient for the DnCNN fingerprint extraction loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
-    parser.add_argument('--perc', type=float, required=False, default=0.00,
-                        help='Coefficient for the Perceptual Loss')
+    parser.add_argument('--disc', type=float, required=False, default=0.00,
+                        help='Coefficient for the Discriminator')
+    parser.add_argument('--softlabels', action='store_true',
+                        help='Use soft labels for the discriminator')
     parser.add_argument('--epochs', '-e', type=int, required=False, default=3001,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
