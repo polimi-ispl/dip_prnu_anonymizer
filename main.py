@@ -71,8 +71,8 @@ class Training:
         self.parameters = None
         self.num_params = None
         self._build_model()
-        if self.args.beta != 0. or self.args.nccd:
-            self.dncnn = a.DnCNN().to(self.input_tensor.device)
+        if self.args.dncnn > 0. or self.args.nccd:
+            self.DnCNN = a.DnCNN().to(self.input_tensor.device)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -147,19 +147,19 @@ class Training:
 
         output_tensor = self.net(input_tensor)
 
-        if self.args.beta != 0. or self.args.nccd:
-            w = self.dncnn(u.rgb2gray(output_tensor, 1))
+        if self.args.dncnn > 0. or self.args.nccd:
+            w = self.DnCNN(u.rgb2gray(output_tensor, 1))
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
             total_loss = self.l2dist(output_tensor, self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
             total_loss = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
                                      self.img_tensor)
-        if self.args.beta != 0.:  # cross-correlation between the true PRNU and the one extracted by the DnCNN
+        if self.args.dncnn > 0.:  # cross-correlation between the true PRNU and the one extracted by the DnCNN
             # w = self.dncnn(u.rgb2gray(output_tensor, 1))
-            total_loss += self.args.beta * u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w)
+            total_loss += self.args.dncnn * u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w)
 
-        if self.args.alpha != 0.:  # SSIM loss, i.e. 1-SSIM
+        if self.args.ssim > 0.:  # SSIM loss, i.e. 1-SSIM
             total_loss += 1 - self.ssim(output_tensor, self.img_tensor)
 
         total_loss.backward()
@@ -279,12 +279,14 @@ def main():
                         help='Optimizer to be used')
     parser.add_argument('--nccd', action='store_true',
                         help='Compute and save the NCC curve computed through DnCNN.')
+    parser.add_argument('--ssim', type=float, required=False, default=0.00,
+                        help='Coefficient for the SSIM loss')
+    parser.add_argument('--dncnn', type=float, required=False, default=0.00,
+                        help='Coefficient for the DnCNN fingerprint extraction loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
-    parser.add_argument('--beta', type=float, required=False, default=0.00,
-                        help='Coefficient for the DnCNN fingerprint extraction loss')
-    parser.add_argument('--alpha', type=float, required=False, default=0.00,
-                        help='Coefficient for the SSIM loss')
+    parser.add_argument('--perc', type=float, required=False, default=0.00,
+                        help='Coefficient for the Perceptual Loss')
     parser.add_argument('--epochs', '-e', type=int, required=False, default=3001,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
