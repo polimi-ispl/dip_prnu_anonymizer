@@ -1,5 +1,6 @@
 from __future__ import print_function
 import warnings
+
 warnings.filterwarnings("ignore")
 
 import os
@@ -16,7 +17,7 @@ np.random.seed(seed)
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
-from architectures import UNet, Skip, DnCNN
+import architectures as a
 from utils.common_utils import *
 from utils import utils as u
 
@@ -37,8 +38,12 @@ class Training:
         self.dtype = dtype
         self.outpath = outpath
         self.img_shape = img_shape
+
+        # losses
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
+        self.ssim = a.SSIMLoss().type(self.dtype)
         self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
+
         self.history = History([], [], [], [], [])
         self.elapsed = None
         self.iiter = 0
@@ -67,7 +72,7 @@ class Training:
         self.num_params = None
         self._build_model()
         if self.args.beta != 0. or self.args.nccd:
-            self.dncnn = DnCNN().to(self.input_tensor.device)
+            self.dncnn = a.DnCNN().to(self.input_tensor.device)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -77,30 +82,30 @@ class Training:
 
     def _build_model(self):
         if self.args.network == 'unet':
-            self.net = UNet(num_input_channels=self.args.input_depth,
-                            num_output_channels=self.img_shape[-1],
-                            filters=self.args.filters,
-                            more_layers=1,  # default is 0
-                            concat_x=False,
-                            upsample_mode=self.args.upsample,  # default is nearest
-                            activation=self.args.activation,
-                            pad=self.args.pad,  # default is zero
-                            norm_layer=torch.nn.InstanceNorm2d,
-                            need_sigmoid=self.args.need_sigmoid,
-                            need_bias=True
-                            ).type(self.dtype)
+            self.net = a.UNet(num_input_channels=self.args.input_depth,
+                              num_output_channels=self.img_shape[-1],
+                              filters=self.args.filters,
+                              more_layers=1,  # default is 0
+                              concat_x=False,
+                              upsample_mode=self.args.upsample,  # default is nearest
+                              activation=self.args.activation,
+                              pad=self.args.pad,  # default is zero
+                              norm_layer=torch.nn.InstanceNorm2d,
+                              need_sigmoid=self.args.need_sigmoid,
+                              need_bias=True
+                              ).type(self.dtype)
         elif self.args.network == 'skip':
-            self.net = Skip(num_input_channels=self.args.input_depth,
-                            num_output_channels=self.img_shape[-1],
-                            num_channels_down=self.args.filters,
-                            num_channels_up=self.args.filters,
-                            num_channels_skip=self.args.skip,
-                            upsample_mode=self.args.upsample,  # default is bilinear
-                            need_sigmoid=self.args.need_sigmoid,
-                            need_bias=True,
-                            pad=self.args.pad,  # default is reflection, but Fantong uses zero
-                            act_fun=self.args.activation  # default is LeakyReLU
-                            ).type(self.dtype)
+            self.net = a.Skip(num_input_channels=self.args.input_depth,
+                              num_output_channels=self.img_shape[-1],
+                              num_channels_down=self.args.filters,
+                              num_channels_up=self.args.filters,
+                              num_channels_skip=self.args.skip,
+                              upsample_mode=self.args.upsample,  # default is bilinear
+                              need_sigmoid=self.args.need_sigmoid,
+                              need_bias=True,
+                              pad=self.args.pad,  # default is reflection, but Fantong uses zero
+                              act_fun=self.args.activation  # default is LeakyReLU
+                              ).type(self.dtype)
         else:
             raise ValueError('ERROR! The network has to be either unet or skip')
         self.parameters = get_params('net', self.net, self.input_tensor)
@@ -116,12 +121,14 @@ class Training:
 
     def load_prnu(self, device_path):
         # clean PRNU to be added to the output
-        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % '_comp' if self.args.compressed else ''))['prnu']
+        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.compressed else
+                                                                            '')))[ 'prnu']
         if self.prnu_clean.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
 
         # filtered PRNU for computing the NCC
-        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % '_comp' if self.args.compressed else ''))['prnu']
+        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % ('_comp' if self.args.compressed else '')))[
+            'prnu']
         if self.prnu_4ncc.shape != self.img_shape[:2]:
             raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
 
@@ -152,15 +159,16 @@ class Training:
             # w = self.dncnn(u.rgb2gray(output_tensor, 1))
             total_loss += self.args.beta * u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w)
 
-        # if self.args.alpha != 0.:
-        #     total_loss += self.kldiv(input_hist, target_hist)
+        if self.args.alpha != 0.:  # SSIM loss, i.e. 1-SSIM
+            total_loss += 1 - self.ssim(output_tensor, self.img_tensor)
+
         total_loss.backward()
 
         self.history.loss.append(total_loss.item())
         self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
         self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
         msg = "\tPicture %s,\tIter %s, Loss = %.2e, PSNR = %.2f dB, SSIM = %.4f" \
-              % (self.imgpath.split('/')[-1], str(self.iiter+1).zfill(u.ten_digit(self.args.epochs)),
+              % (self.imgpath.split('/')[-1], str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
                  self.history.loss[-1], self.history.psnr[-1], self.history.ssim[-1])
 
         out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
@@ -263,7 +271,8 @@ def main():
                         help='Depth of the input noise tensor')
     parser.add_argument('--pad', type=str, required=False, default='zero', choices=['zero', 'reflection'],
                         help='Padding strategy for the network')
-    parser.add_argument('--upsample', type=str, required=False, default='nearest', choices=['nearest', 'bilinear', 'deconv'],
+    parser.add_argument('--upsample', type=str, required=False, default='nearest',
+                        choices=['nearest', 'bilinear', 'deconv'],
                         help='Upgoing deconvolution strategy for the network')
     # training parameter
     parser.add_argument('--optimizer', type=str, required=False, default='adam', choices=['adam', 'lbfgs', 'sgd'],
@@ -274,6 +283,8 @@ def main():
                         help='Coefficient for adding the PRNU')
     parser.add_argument('--beta', type=float, required=False, default=0.00,
                         help='Coefficient for the DnCNN fingerprint extraction loss')
+    parser.add_argument('--alpha', type=float, required=False, default=0.00,
+                        help='Coefficient for the SSIM loss')
     parser.add_argument('--epochs', '-e', type=int, required=False, default=3001,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,

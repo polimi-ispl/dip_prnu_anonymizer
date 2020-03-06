@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from collections import OrderedDict
+from utils.pytorch_ssim import SSIM
 
 
 class Downsampler(nn.Module):
@@ -609,3 +610,5 @@ class TVLoss(nn.Module):
     def _tensor_size(self, t):
         return t.size()[1] * t.size()[2] * t.size()[3]
 
+
+SSIMLoss = SSIM
