@@ -215,14 +215,17 @@ def compute_l1_weight(A, c, use_mean=False):
 
 def set_gpu(id=-1):
     """
-    Set GPU device or select the one with the lowest memory usage (None for
-    CPU-only)
+    Set GPU device or select the one with the lowest memory usage (None for CPU-only)
     """
     if id is None:
         # CPU only
         print(colored('GPU not selected', 'yellow'))
     else:
-        device = id if id is not -1 else getFirstAvailable(order='memory')[0]  # -1 for automatic choice
+        try:
+            device = id if id is not -1 else getFirstAvailable(order='memory')[0]  # -1 for automatic choice
+        except RuntimeError:
+            print(colored('WARNING! No GPU available, switching to CPU', 'yellow'))
+            return
         try:
             name = getGPUs()[device].name
         except IndexError:

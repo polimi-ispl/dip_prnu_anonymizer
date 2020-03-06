@@ -116,12 +116,12 @@ class Training:
 
     def load_prnu(self, device_path):
         # clean PRNU to be added to the output
-        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu.mat'))['prnu']
+        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % '_comp' if self.args.compressed else ''))['prnu']
         if self.prnu_clean.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
 
         # filtered PRNU for computing the NCC
-        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W.mat'))['prnu']
+        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % '_comp' if self.args.compressed else ''))['prnu']
         if self.prnu_4ncc.shape != self.img_shape[:2]:
             raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
 
@@ -245,6 +245,9 @@ def main():
                              '(e.g. 10, 15 to process images from the 10th to the 15th)')
     parser.add_argument('--outpath', type=str, required=False, default='test',
                         help='Run name in ./results/')
+    parser.add_argument('--compressed', '-comp', action='store_true',
+                        help='Use the JPEG dataset')
+
     # network design
     parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip'],
                         help='Name of the network to be used')
@@ -293,7 +296,7 @@ def main():
     u.set_gpu(args.gpu)
 
     # create output folder
-    outpath = os.path.join('./results/', args.outpath)
+    outpath = os.path.join('./results/', 'comp' if args.compressed else '', args.outpath)
     if not os.path.exists(outpath):
         os.makedirs(outpath)
     print(colored('Saving to %s' % outpath, 'yellow'))
@@ -312,8 +315,12 @@ def main():
     pics_idx = args.pics_idx if args.pics_idx is not None else [0, None]  # all the pictures
     for device in device_list:  # ./dataset/device
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
+
         T.load_prnu(device)
-        pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
+        if args.compressed:
+            pic_list = glob(os.path.join(device, '*.JPG'))[pics_idx[0]:pics_idx[-1]]
+        else:
+            pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
 
         for picpath in pic_list:
             T.load_image(picpath)
