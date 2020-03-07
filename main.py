@@ -160,7 +160,7 @@ class Training:
             total_loss += self.args.dncnn * u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w)
 
         if self.args.ssim > 0.:  # SSIM loss, i.e. 1-SSIM
-            total_loss += 1 - self.ssim(output_tensor, self.img_tensor)
+            total_loss += self.args.ssim * (1 - self.ssim(output_tensor, self.img_tensor))
 
         total_loss.backward()
 
