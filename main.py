@@ -21,6 +21,8 @@ import architectures as a
 from utils.common_utils import *
 from utils import utils as u
 
+from perceptual_loss import PerceptualLoss
+
 from argparse import ArgumentParser
 from collections import namedtuple
 from time import time
@@ -29,7 +31,7 @@ from glob import glob
 import json
 
 # this is defined here because of pickle
-History = namedtuple("History", ['loss', 'psnr', 'ssim', 'ncc_w', 'ncc_d'])
+History = namedtuple("History", ['loss', 'psnr', 'ssim', 'ncc_w', 'ncc_d', 'vgg19'])
 
 
 class Training:
@@ -42,14 +44,15 @@ class Training:
         # losses
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
         self.ssim = a.SSIMLoss().type(self.dtype)
-        self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
+        # self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
 
-        self.history = History([], [], [], [], [])
-        self.elapsed = None
+        # training parameters
+        self.history = History._make([list() for _ in History._fields])
         self.iiter = 0
         self.saving_interval = 0
         self.psnr_max = 0
 
+        # data
         self.imgpath = None
         self.image_name = None
         self.img = None
@@ -73,6 +76,8 @@ class Training:
         self._build_model()
         if self.args.dncnn > 0. or self.args.nccd:
             self.DnCNN = a.DnCNN().to(self.input_tensor.device)
+        if self.args.perc > 0.:
+            self.vgg19loss = PerceptualLoss().type(self.dtype)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -162,6 +167,9 @@ class Training:
         if self.args.ssim > 0.:  # SSIM loss, i.e. 1-SSIM
             total_loss += self.args.ssim * (1 - self.ssim(output_tensor, self.img_tensor))
 
+        if self.args.perc > 0.:  # Perceptual Loss
+            total_loss += self.args.perc * self.vgg19loss(input=output_tensor, target=self.img_tensor)
+
         total_loss.backward()
 
         self.history.loss.append(total_loss.item())
@@ -180,12 +188,16 @@ class Training:
             self.history.ncc_d.append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), w).item())
             msg += ', NCC_d = %.6f' % self.history.ncc_d[-1]
 
+        if self.args.perc:
+            self.history.vgg19.append(self.vgg19loss(input=output_tensor, target=self.img_tensor))
+            msg += ', VGG19 = %.6f' % self.history.vgg19[-1]
+
         print(colored(msg, 'yellow'), '\r', end='')
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history.psnr[-1]:
             self.psnr_max = self.history.psnr[-1]
-            if self.args.save_png_every > 0 and \
+            if self.args.save_png_every and \
                     self.psnr_max > self.args.psnr_min and \
                     self.iiter > 0 \
                     and self.saving_interval >= self.args.save_png_every:
@@ -238,7 +250,7 @@ class Training:
         torch.cuda.empty_cache()
         self._build_input()
         self._build_model()
-        self.history = History([], [], [], [], [])
+        self.history = History._make([list() for _ in History._fields])
 
 
 def main():
@@ -283,6 +295,8 @@ def main():
                         help='Coefficient for the SSIM loss')
     parser.add_argument('--dncnn', type=float, required=False, default=0.00,
                         help='Coefficient for the DnCNN fingerprint extraction loss')
+    parser.add_argument('--perc', type=float, required=False, default=0.00,
+                        help='Coefficient for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
     parser.add_argument('--disc', type=float, required=False, default=0.00,

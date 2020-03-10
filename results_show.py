@@ -7,11 +7,13 @@ import numpy as np
 from scipy.io import loadmat
 from sklearn.metrics import roc_curve
 
+SIM_PATH = 'ssim'
+
 # devices:
 devices = ['Nikon_D200_0', 'Nikon_D200_1', 'Nikon_D70_0', 'Nikon_D70_1', 'Nikon_D70s_0', 'Nikon_D70s_1']
 
 # result folder
-output_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/_evaluation/gamma0.1'
+output_folder = os.path.join('/nas/home/fpicetti/dip_prnu_anonymizer/results/_evaluation', SIM_PATH)
 
 psnr_min_vec = [37, 38, 39, 40]
 
@@ -60,11 +62,15 @@ for p, psnr_min in enumerate(psnr_min_vec):
             fp[dev_idx, t] = np.sum(tn_set > thr)
 
     # ROC CURVE OF EAH DEVICE BY SKLEARN
-    #     fpr, tpr, _ = roc_curve(np.concatenate([np.ones_like(tp_set), np.zeros_like(tn_set)]),
-    #                             np.concatenate([tp_set, tn_set]))
-    #
-    #     plt.plot(fpr, tpr)
-    # plt.show()
+        fpr, tpr, _ = roc_curve(np.concatenate([np.ones_like(tp_set), np.zeros_like(tn_set)]),
+                                np.concatenate([tp_set, tn_set]))
+
+        plt.plot(fpr, tpr, label=str(dev))
+
+    plt.axis('square')
+    plt.legend()
+    plt.title(output_folder.split('/')[-1])
+    plt.show()
 
     tp_rate = np.mean(tp / (tp + fn), axis=0)
     fp_rate = np.mean(fp / (fp + tn), axis=0)

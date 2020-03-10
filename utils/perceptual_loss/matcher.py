@@ -22,7 +22,6 @@ class Matcher:
         self.map_index = map_index
         self.method = 'match'
 
-
     def __call__(self, module, features):
         statistics = self.get_statistics(features)
 
@@ -31,31 +30,33 @@ class Matcher:
             self.stored[module] = statistics.detach()
 
         elif self.mode == 'match':
-           
+
             if statistics.ndimension() == 2:
 
                 if self.method == 'maximize':
                     self.losses[module] = - statistics[0, self.map_index]
                 else:
-                    self.losses[module] = torch.abs(300 - statistics[0, self.map_index]) 
+                    self.losses[module] = torch.abs(300 - statistics[0, self.map_index])
 
             else:
                 ws = self.window_size
 
                 t = statistics.detach() * 0
 
-                s_cc = statistics[:1, :, t.shape[2] // 2 - ws:t.shape[2] // 2 + ws, t.shape[3] // 2 - ws:t.shape[3] // 2 + ws] #* 1.0
-                t_cc = t[:1, :, t.shape[2] // 2 - ws:t.shape[2] // 2 + ws, t.shape[3] // 2 - ws:t.shape[3] // 2 + ws] #* 1.0
-                t_cc[:, self.map_index,...] = 1
+                s_cc = statistics[:1, :, t.shape[2] // 2 - ws:t.shape[2] // 2 + ws,
+                       t.shape[3] // 2 - ws:t.shape[3] // 2 + ws]  # * 1.0
+                t_cc = t[:1, :, t.shape[2] // 2 - ws:t.shape[2] // 2 + ws,
+                       t.shape[3] // 2 - ws:t.shape[3] // 2 + ws]  # * 1.0
+                t_cc[:, self.map_index, ...] = 1
 
                 if self.method == 'maximize':
                     self.losses[module] = -(s_cc * t_cc.contiguous()).sum()
                 else:
-                    self.losses[module] = torch.abs(200 -(s_cc * t_cc.contiguous())).sum()
-
+                    self.losses[module] = torch.abs(200 - (s_cc * t_cc.contiguous())).sum()
 
     def clean(self):
         self.losses = {}
+
 
 def gram_matrix(x):
     (b, ch, h, w) = x.size()

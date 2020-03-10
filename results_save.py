@@ -6,14 +6,16 @@ from glob import glob
 import numpy as np
 from scipy.io import loadmat
 
+SIM_PATH = 'ssim'
+
 # devices:
 devices = ['Nikon_D200_0', 'Nikon_D200_1', 'Nikon_D70_0', 'Nikon_D70_1', 'Nikon_D70s_0', 'Nikon_D70s_1']
 
 # results folder:
-result_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/gamma0.1'
+result_folder = os.path.join('/nas/home/fpicetti/dip_prnu_anonymizer/results/', SIM_PATH)
 
 # output folder
-output_folder = '/nas/home/fpicetti/dip_prnu_anonymizer/results/_evaluation/gamma0.1'
+output_folder = os.path.join('/nas/home/fpicetti/dip_prnu_anonymizer/results/_evaluation', SIM_PATH)
 
 psnr_min_vec = [37, 38, 39, 40]
 
