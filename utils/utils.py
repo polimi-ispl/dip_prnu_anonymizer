@@ -26,11 +26,11 @@ def set_data_path(host='polimi'):
         raise ValueError('host name not recognized!')
     return data_path
 
-    
+
 def log10plot(in_content):
     return np.log10(np.asarray(in_content) / in_content[0])
-    
-    
+
+
 def ten_digit(number):
     return int(np.floor(np.log10(number)) + 1)
 
@@ -63,7 +63,7 @@ def plot2pgf(temp, filename, folder='./'):
     """
     if len(temp) == 1:  # if used as plt.plot(y) without the abscissa axis
         temp = [list(range(len(temp[0]))), temp[0]]
-        
+
     if not os.path.exists(folder):
         os.makedirs(folder)
     np.savetxt(os.path.join(folder, filename + '.txt'), np.asarray(temp).T,
@@ -85,7 +85,7 @@ def clim(in_content, ratio, zero_mean=True):
         return -ratio * max_abs_value, ratio * max_abs_value
     else:
         return ratio * in_content.min(), ratio * in_content.max()
-    
+
 
 def save_image(in_content, filename, clim=(None, None), folder='./'):
     """
@@ -118,7 +118,7 @@ def sec2time(seconds):
 
 
 def mse(target, output):
-    return np.mean((target-output)**2)
+    return np.mean((target - output) ** 2)
 
 
 def snr(target, output):
@@ -131,7 +131,7 @@ def snr(target, output):
     """
     if target.shape != output.shape:
         raise ValueError('There is something wrong with the dimensions!')
-    return 20*np.log10(np.linalg.norm(target) / np.linalg.norm(target-output))
+    return 20 * np.log10(np.linalg.norm(target) / np.linalg.norm(target - output))
 
 
 def clip_normalize_power(x, mymin, mymax, p):
@@ -262,19 +262,15 @@ def add_prnu(img, k, weight=0.01, to_each_channel=True):
         raise NotImplementedError("For now the PRNU is added to each channel")
 
 
-def psnr(img1: torch.Tensor or np.ndarray, img2: torch.Tensor or np.ndarray, color_channel:int=-1) -> torch.Tensor or \
-                                                                                              np.ndarray:
+def psnr(img1: torch.Tensor or np.ndarray, img2: torch.Tensor or np.ndarray, color_channel: int = -1) -> torch.Tensor or \
+                                                                                                         np.ndarray:
     if isinstance(img1, np.ndarray) and isinstance(img2, np.ndarray):
         return 10 * np.log10(255 ** 2 / np.mean((img1 - img2) ** 2))
     else:
         if color_channel != -1:
-            img1 = img1.permute(0,2,3,1)
-            img2 = img2.permute(0,2,3,1)
+            img1 = img1.permute(0, 2, 3, 1)
+            img2 = img2.permute(0, 2, 3, 1)
         return 10 * torch.log10(255 ** 2 / torch.mean((img1 - img2).view(-1) ** 2))
-
-
-def extract_prnu(img):
-    return prnu.extract_single(float2png(img))
 
 
 def ncc(k1: torch.Tensor or np.ndarray, k2: torch.Tensor or np.ndarray) -> float:
@@ -315,7 +311,7 @@ def png2float(in_content):
     return in_content.astype(np.float32) / 255.
 
 
-def rgb2gray(in_content: np.ndarray or torch.Tensor, color_channel:int=-1):
+def rgb2gray(in_content: np.ndarray or torch.Tensor, color_channel: int = -1):
     if isinstance(in_content, np.ndarray):
         return prnu.rgb2gray(in_content)  # TODO handle the color channel
 
@@ -332,9 +328,16 @@ def rgb2gray(in_content: np.ndarray or torch.Tensor, color_channel:int=-1):
         im_gray = in_content.clone()
     elif in_content.shape[-1] == 3:
         w, h = in_content.shape[1:3]
-        im = in_content.reshape(w*h, 3)
+        im = in_content.reshape(w * h, 3)
         im_gray = (im @ rgb2gray_vector).reshape(w, h)
     else:
         raise ValueError('Input image must have 1 or 3 channels')
 
     return im_gray[None, None, :, :]
+
+
+def crop_center(img, cropx, cropy):
+    y, x, c = img.shape
+    startx = x // 2 - cropx // 2
+    starty = y // 2 - cropy // 2
+    return img[starty:starty + cropy, startx:startx + cropx, :]
