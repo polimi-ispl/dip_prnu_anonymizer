@@ -77,7 +77,15 @@ class Training:
         if self.args.dncnn > 0. or self.args.nccd:
             self.DnCNN = a.DnCNN().to(self.input_tensor.device)
         if self.args.perc > 0.:
-            self.vgg19loss = PerceptualLoss().type(self.dtype)
+            self.vgg19loss = PerceptualLoss(
+                input_range='sigmoid',  # tanh
+                net_type='vgg19_pytorch_modified',  # original vgg19 with slope for LeakyReLU 0.02
+                preprocessing_type='corresponding',
+                matching_loss='L1',
+                match=[{'matching_type': 'features', 'layers': self.args.perc_layers}],
+                average_loss=True,
+                extractor=None
+            ).type(self.dtype)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -119,7 +127,12 @@ class Training:
     def load_image(self, image_path):
         self.imgpath = image_path
         self.image_name = self.imgpath.split('.')[-2].split('/')[-1]
-        self.img = mpimg.imread(image_path)
+        # if PNG, imread normalizes to 0, 1
+        # if JPEG, we must do it by hand
+        self.img = u.crop_center(mpimg.imread(image_path), self.img_shape[0], self.img_shape[1])
+        if self.imgpath.split('.')[-1] in ['JPEG', 'JPG', 'jpeg', 'jpg']:
+            self.img = u.normalize(self.img, 0, 255, False)[0]
+
         if self.img.shape != self.img_shape:
             raise ValueError('The loaded image shape has to be', self.img_shape)
         self.img_tensor = u.numpy2torch(np.swapaxes(self.img, 2, 0)[np.newaxis])
@@ -156,41 +169,38 @@ class Training:
             w = self.DnCNN(u.rgb2gray(output_tensor, 1))
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
-            total_loss = self.l2dist(output_tensor, self.img_tensor)
+            mse = self.l2dist(output_tensor, self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
-            total_loss = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
-                                     self.img_tensor)
-        if self.args.dncnn > 0.:  # cross-correlation between the true PRNU and the one extracted by the DnCNN
-            # w = self.dncnn(u.rgb2gray(output_tensor, 1))
-            total_loss += self.args.dncnn * u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w)
+            mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma), self.img_tensor)
 
-        if self.args.ssim > 0.:  # SSIM loss, i.e. 1-SSIM
-            total_loss += self.args.ssim * (1 - self.ssim(output_tensor, self.img_tensor))
+        dncnn_loss = u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w) if self.args.dncnn else 0.
+        ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
+        perc_loss = self.vgg19loss(input=output_tensor, target=self.img_tensor) if self.args.perc else 0.
 
-        if self.args.perc > 0.:  # Perceptual Loss
-            total_loss += self.args.perc * self.vgg19loss(input=output_tensor, target=self.img_tensor)
-
+        total_loss = mse + self.args.ssim * ssim_loss + self.args.dncnn * dncnn_loss + self.args.perc * perc_loss
         total_loss.backward()
 
         self.history.loss.append(total_loss.item())
         self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
         self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
-        msg = "\tPicture %s,\tIter %s, Loss = %.2e, PSNR = %.2f dB, SSIM = %.4f" \
+        msg = "\tPicture %s,\tIter %s, Loss = %.2e, MSE=%.2e"\
               % (self.imgpath.split('/')[-1], str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
-                 self.history.loss[-1], self.history.psnr[-1], self.history.ssim[-1])
-
-        out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
-        self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
-                                        u.prnu.extract_single(u.float2png(out_img))))
-        msg += ', NCC_w = %.6f' % self.history.ncc_w[-1]
+                 self.history.loss[-1], mse.item())
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
             self.history.ncc_d.append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), w).item())
-            msg += ', NCC_d = %.6f' % self.history.ncc_d[-1]
+            msg += ', NCC_d = %+.4f' % self.history.ncc_d[-1]
 
         if self.args.perc:
-            self.history.vgg19.append(self.vgg19loss(input=output_tensor, target=self.img_tensor))
-            msg += ', VGG19 = %.6f' % self.history.vgg19[-1]
+            self.history.vgg19.append(perc_loss.item())
+            msg += ', VGG19 = %.2e' % self.history.vgg19[-1]
+
+        # display also evaluation metrics
+        out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
+        self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
+                                        u.prnu.extract_single(u.float2png(out_img), sigma=3)))
+        msg += ', PSNR = %2.2f dB, SSIM = %.4f, NCC_w = %+.4f'\
+               % (self.history.psnr[-1], self.history.ssim[-1], self.history.ncc_w[-1])
 
         print(colored(msg, 'yellow'), '\r', end='')
 
@@ -297,6 +307,8 @@ def main():
                         help='Coefficient for the DnCNN fingerprint extraction loss')
     parser.add_argument('--perc', type=float, required=False, default=0.00,
                         help='Coefficient for the VGG19 perceptual loss')
+    parser.add_argument('--perc_layers', type=str, required=False, default='1,6,11,20,29',
+                        help='Comma-separated layers indexes for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
     parser.add_argument('--disc', type=float, required=False, default=0.00,
