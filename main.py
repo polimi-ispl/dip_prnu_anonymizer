@@ -352,6 +352,7 @@ def main():
         device_list = [os.path.join('dataset', d) for d in args.device]
     elif isinstance(args.device, str):
         device_list = [os.path.join('dataset', args.device)]
+    device_list = sorted(device_list)
 
     pics_idx = args.pics_idx if args.pics_idx is not None else [0, None]  # all the pictures
     for device in device_list:  # ./dataset/device
@@ -362,6 +363,7 @@ def main():
             pic_list = glob(os.path.join(device, '*.JPG'))[pics_idx[0]:pics_idx[-1]]
         else:
             pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
+        pic_list = sorted(pic_list)
 
         for picpath in pic_list:
             T.load_image(picpath)
