@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from collections import OrderedDict
 from utils.pytorch_ssim import SSIM
-from utils.perceptual_loss.perceptual_loss import PerceputalLoss
+from perceptual_loss import PerceptualLoss
 import functools
 
 
@@ -615,7 +615,7 @@ class TVLoss(nn.Module):
 
 SSIMLoss = SSIM
 
-PercLoss = PerceputalLoss
+PercLoss = PerceptualLoss
 
 
 class NLayerDiscriminator(nn.Module):
@@ -658,7 +658,8 @@ class NLayerDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, True)
         ]
 
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
+        sequence += [
+            nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]  # output 1 channel prediction map
         self.model = nn.Sequential(*sequence)
 
     def forward(self, input):
@@ -718,3 +719,186 @@ class Wasserstein(nn.Module):
     def forward(self, inputs):
         output = self.main(inputs)
         return output.view(-1)
+
+
+# MultiResUNet
+def conv2dbn(in_f, out_f, kernel_size, stride=1, bias=True, pad='zero', downsample_mode='stride', act_fun='LeakyReLU'):
+    block = conv(in_f, out_f, kernel_size, stride=stride, bias=bias, pad=pad, downsample_mode=downsample_mode)
+    block.add(bn(out_f))
+    block.add(act(act_fun))
+    return block
+
+
+class Add(nn.Module):
+    def __init__(self, *args):
+        super(Add, self).__init__()
+
+        for idx, module in enumerate(args):
+            self.add_module(str(idx), module)
+
+    def forward(self, input):
+        inputs = []
+        for module in self._modules.values():
+            inputs.append(module(input))
+
+        return torch.stack(inputs, dim=0).sum(dim=0)
+
+
+def MultiResBlockFunc(U, f_in, alpha=1.67, pad='zero', act_fun='LeakyReLU', bias=True):
+    W = alpha * U
+    out_dim = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
+    model = nn.Sequential()
+    deep = nn.Sequential()
+    conv3x3 = conv2dbn(f_in, int(W * 0.167), 3, 1,
+                       bias=bias, pad=pad, act_fun=act_fun)
+    conv5x5 = conv3x3.add(conv2dbn(int(W * 0.167), int(W * 0.333), 3, 1, bias=bias,
+                          pad=pad, act_fun=act_fun))
+    conv7x7 = conv5x5.add(conv2dbn(int(W * 0.333), int(W * 0.5), 3, 1, bias=bias,
+                          pad=pad, act_fun=act_fun))
+    shortcut = conv2dbn(f_in, out_dim, 1, 1,
+                        bias=bias, pad=pad, act_fun=act_fun)
+    deep.add(Concat(1, conv3x3, conv5x5, conv7x7))
+    deep.add(bn(out_dim))
+    model.add(Add(deep, shortcut))
+    model.add(act(act_fun))
+    model.add(bn(out_dim))
+    return model
+
+
+class MultiResBlock(nn.Module):
+    def __init__(self, U, f_in, alpha=1.67, pad='zero', act_fun='LeakyReLU', bias=True):
+        super(MultiResBlock, self).__init__()
+        W = alpha * U
+        self.out_dim = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
+        self.shortcut = conv2dbn(f_in, int(W * 0.167) + int(W * 0.333) + int(W * 0.5), 1, 1,
+                                 bias=bias, pad=pad, act_fun=act_fun)
+        self.conv3x3 = conv2dbn(f_in, int(W * 0.167), 3, 1, bias=bias,
+                                pad=pad, act_fun=act_fun)
+        self.conv5x5 = conv2dbn(int(W * 0.167), int(W * 0.333), 3, 1, bias=bias,
+                                pad=pad, act_fun=act_fun)
+        self.conv7x7 = conv2dbn(int(W * 0.333), int(W * 0.5), 3, 1, bias=bias,
+                                pad=pad, act_fun=act_fun)
+        self.bn1 = bn(self.out_dim)
+        self.bn2 = bn(self.out_dim)
+        self.accfun = act(act_fun)
+
+    def forward(self, input):
+        out1 = self.conv3x3(input)
+        out2 = self.conv5x5(out1)
+        out3 = self.conv7x7(out2)
+        out = self.bn1(torch.cat([out1, out2, out3], dim=1))
+        out = torch.add(self.shortcut(input), out)
+        out = self.bn2(self.accfun(out))
+        return out
+
+
+class PathRes(nn.Module):
+    def __init__(self, f_in, f_out, length, pad='zero', act_fun='LeakyReLU', bias=True):
+        super(PathRes, self).__init__()
+        self.network = []
+        self.network.append(conv2dbn(f_in, f_out, 3, 1, bias=bias, pad=pad, act_fun=act_fun))
+        self.network.append(conv2dbn(f_in, f_out, 1, 1, bias=bias, pad=pad, act_fun=act_fun))
+        self.network.append(bn(f_out))
+        for i in range(length - 1):
+            self.network.append(conv2dbn(f_out, f_out, 3, 1, bias=bias, pad=pad, act_fun=act_fun))
+            self.network.append(conv2dbn(f_out, f_out, 1, 1, bias=bias, pad=pad, act_fun=act_fun))
+            self.network.append(bn(f_out))
+        self.accfun = act(act_fun)
+        self.length = length
+        self.network = nn.Sequential(*self.network)
+
+    def forward(self, input):
+        out = self.network[2](self.accfun(torch.add(self.network[0](input),
+                              self.network[1](input))))
+        for i in range(1, self.length):
+            out = self.network[i * 3 + 2](self.accfun(torch.add(self.network[i * 3](out),
+                                          self.network[i * 3 + 1](out))))
+
+        return out
+
+
+def MulResUnet(
+        num_input_channels=2, num_output_channels=3,
+        num_channels_down=[16, 32, 64, 128, 256], num_channels_up=[16, 32, 64, 128, 256], num_channels_skip=[16, 32, 64, 128],
+        filter_size_down=3, filter_size_up=3, filter_skip_size=1, alpha=1.67,
+        need_sigmoid=True, need_bias=True,
+        pad='zero', upsample_mode='nearest', downsample_mode='stride', act_fun='LeakyReLU',
+        need1x1_up=True):
+    """Assembles encoder-decoder with skip connections.
+
+    Arguments:
+        act_fun: Either string 'LeakyReLU|Swish|ELU|none' or module (e.g. nn.ReLU)
+        pad (string): zero|reflection (default: 'zero')
+        upsample_mode (string): 'nearest|bilinear' (default: 'nearest')
+        downsample_mode (string): 'stride|avg|max|lanczos2' (default: 'stride')
+
+    """
+    assert len(num_channels_down) == len(
+        num_channels_up) == (len(num_channels_skip) + 1)
+
+    n_scales = len(num_channels_down)
+
+    if not (isinstance(upsample_mode, list) or isinstance(upsample_mode, tuple)):
+        upsample_mode = [upsample_mode] * n_scales
+
+    if not (isinstance(downsample_mode, list)or isinstance(downsample_mode, tuple)):
+        downsample_mode = [downsample_mode] * n_scales
+
+    if not (isinstance(filter_size_down, list) or isinstance(filter_size_down, tuple)):
+        filter_size_down = [filter_size_down] * n_scales
+
+    if not (isinstance(filter_size_up, list) or isinstance(filter_size_up, tuple)):
+        filter_size_up = [filter_size_up] * n_scales
+
+    last_scale = n_scales - 1
+
+    model = nn.Sequential()
+    model_tmp = model
+    multires = MultiResBlock(num_channels_down[0], num_input_channels,
+                             alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias)
+
+    model_tmp.add(multires)
+    input_depth = multires.out_dim
+
+    for i in range(1, len(num_channels_down)):
+
+        deeper = nn.Sequential()
+        skip = nn.Sequential()
+
+        multires = MultiResBlock(num_channels_down[i], input_depth,
+                                 alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias)
+
+        deeper.add(conv(input_depth, input_depth, 3, stride=2, bias=need_bias, pad=pad,
+                        downsample_mode=downsample_mode[i]))
+        deeper.add(bn(input_depth))
+        deeper.add(act(act_fun))
+        deeper.add(multires)
+
+        if num_channels_skip[i - 1] != 0:
+            skip.add(PathRes(input_depth, num_channels_skip[i - 1], 1, pad=pad, act_fun=act_fun, bias=need_bias))
+            model_tmp.add(Concat(1, skip, deeper))
+        else:
+            model_tmp.add(deeper)
+
+        deeper_main = nn.Sequential()
+
+        if i != len(num_channels_down) - 1:
+            # not the deepest
+            deeper.add(deeper_main)
+
+        deeper.add(nn.Upsample(scale_factor=2, mode=upsample_mode[i]))
+
+        model_tmp.add(MultiResBlock(num_channels_up[i - 1], multires.out_dim + num_channels_skip[i - 1],
+                      alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias))
+
+        input_depth = multires.out_dim
+        model_tmp = deeper_main
+    W = num_channels_up[0] * alpha
+    last_kernal = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
+
+    model.add(
+        conv(last_kernal, num_output_channels, 1, bias=need_bias, pad=pad))
+    if need_sigmoid:
+        model.add(nn.Sigmoid())
+
+    return model

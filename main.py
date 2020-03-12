@@ -21,8 +21,6 @@ import architectures as a
 from utils.common_utils import *
 from utils import utils as u
 
-from perceptual_loss import PerceptualLoss
-
 from argparse import ArgumentParser
 from collections import namedtuple
 from time import time
@@ -77,7 +75,7 @@ class Training:
         if self.args.dncnn > 0. or self.args.nccd:
             self.DnCNN = a.DnCNN().to(self.input_tensor.device)
         if self.args.perc > 0.:
-            self.vgg19loss = PerceptualLoss(
+            self.vgg19loss = a.PerceptualLoss(
                 input_range='sigmoid',  # tanh
                 net_type='vgg19_pytorch_modified',  # original vgg19 with slope for LeakyReLU 0.02
                 preprocessing_type='corresponding',
@@ -119,8 +117,20 @@ class Training:
                               pad=self.args.pad,  # default is reflection, but Fantong uses zero
                               act_fun=self.args.activation  # default is LeakyReLU
                               ).type(self.dtype)
+        elif self.args.network == 'multi':
+            self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
+                                    num_output_channels=self.img_shape[-1],
+                                    num_channels_down=self.args.filters,
+                                    num_channels_up=self.args.filters,
+                                    num_channels_skip=self.args.skip,
+                                    upsample_mode=self.args.upsample,  # default is bilinear
+                                    need_sigmoid=self.args.need_sigmoid,
+                                    need_bias=True,
+                                    pad=self.args.pad,  # default is reflection, but Fantong uses zero
+                                    act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
+                                    ).type(self.dtype)
         else:
-            raise ValueError('ERROR! The network has to be either unet or skip')
+            raise ValueError('ERROR! The network has to be either unet or skip or multi')
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
@@ -140,13 +150,14 @@ class Training:
     def load_prnu(self, device_path):
         # clean PRNU to be added to the output
         self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.compressed else
-                                                                            '')))[ 'prnu']
+                                                                            '')))['prnu']
         if self.prnu_clean.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
 
         # filtered PRNU for computing the NCC
-        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % ('_comp' if self.args.compressed else '')))[
-            'prnu']
+        self.prnu_4ncc = \
+            loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % ('_comp' if self.args.compressed else '')))[
+                'prnu']
         if self.prnu_4ncc.shape != self.img_shape[:2]:
             raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
 
@@ -171,7 +182,8 @@ class Training:
         if self.args.gamma == 0.:  # MSE between reference image and output image
             mse = self.l2dist(output_tensor, self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
-            mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma), self.img_tensor)
+            mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
+                              self.img_tensor)
 
         dncnn_loss = u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
@@ -183,7 +195,7 @@ class Training:
         self.history.loss.append(total_loss.item())
         self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
         self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
-        msg = "\tPicture %s,\tIter %s, Loss = %.2e, MSE=%.2e"\
+        msg = "\tPicture %s,\tIter %s, Loss = %.2e, MSE=%.2e" \
               % (self.imgpath.split('/')[-1], str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
                  self.history.loss[-1], mse.item())
 
@@ -199,7 +211,7 @@ class Training:
         out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
         self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
                                         u.prnu.extract_single(u.float2png(out_img), sigma=3)))
-        msg += ', PSNR = %2.2f dB, SSIM = %.4f, NCC_w = %+.4f'\
+        msg += ', PSNR = %2.2f dB, SSIM = %.4f, NCC_w = %+.4f' \
                % (self.history.psnr[-1], self.history.ssim[-1], self.history.ncc_w[-1])
 
         print(colored(msg, 'yellow'), '\r', end='')
@@ -273,13 +285,13 @@ def main():
     parser.add_argument('--pics_idx', nargs='+', type=int, required=False,
                         help='indeces of the first and last pictures to be processed'
                              '(e.g. 10, 15 to process images from the 10th to the 15th)')
-    parser.add_argument('--outpath', type=str, required=False, default='test',
+    parser.add_argument('--outpath', type=str, required=False, default='debug',
                         help='Run name in ./results/')
     parser.add_argument('--compressed', '-comp', action='store_true',
                         help='Use the JPEG dataset')
 
     # network design
-    parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip'],
+    parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multi'],
                         help='Name of the network to be used')
     parser.add_argument('--activation', type=str, default='ReLU', required=False,
                         help='Activation function to be used in the convolution block [ReLU, Tanh, LeakyReLU]')
@@ -372,6 +384,9 @@ def main():
             T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
+
+    os.system('python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
+              % ' '.join(sys.argv).split('.py')[-1][1:])
 
 
 if __name__ == '__main__':
