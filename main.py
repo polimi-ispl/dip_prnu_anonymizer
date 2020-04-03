@@ -117,7 +117,7 @@ class Training:
                               pad=self.args.pad,  # default is reflection, but Fantong uses zero
                               act_fun=self.args.activation  # default is LeakyReLU
                               ).type(self.dtype)
-        elif self.args.network == 'multi':
+        elif self.args.network == 'multires':
             self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
                                     num_output_channels=self.img_shape[-1],
                                     num_channels_down=self.args.filters,
@@ -130,7 +130,7 @@ class Training:
                                     act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
                                     ).type(self.dtype)
         else:
-            raise ValueError('ERROR! The network has to be either unet or skip or multi')
+            raise ValueError('ERROR! The network has to be either unet or skip or multires')
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
@@ -185,7 +185,7 @@ class Training:
             mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
                               self.img_tensor)
 
-        dncnn_loss = u.ncc(self.prnu_clean_tensor * u.rgb2gray(output_tensor, 1), w) if self.args.dncnn else 0.
+        dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), w) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
         perc_loss = self.vgg19loss(input=output_tensor, target=self.img_tensor) if self.args.perc else 0.
 
@@ -291,7 +291,7 @@ def main():
                         help='Use the JPEG dataset')
 
     # network design
-    parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multi'],
+    parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
     parser.add_argument('--activation', type=str, default='ReLU', required=False,
                         help='Activation function to be used in the convolution block [ReLU, Tanh, LeakyReLU]')
