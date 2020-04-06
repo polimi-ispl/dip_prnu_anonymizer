@@ -275,7 +275,7 @@ class Training:
         self.history = History._make([list() for _ in History._fields])
 
 
-def main():
+def _parse_args():
     parser = ArgumentParser()
     # dataset parameter
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
@@ -343,7 +343,11 @@ def main():
                         help='Type of noise for the input tensor')
     parser.add_argument('--noise_std', type=float, default=.1, required=False,
                         help='Standard deviation of the noise for the input tensor')
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main():
+    args = _parse_args()
 
     # set the engine to be used
     u.set_gpu(args.gpu)
