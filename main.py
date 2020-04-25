@@ -139,6 +139,12 @@ class Training:
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
+    def _build_mask(self):
+        """Create a random mask"""
+        mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int)
+        self.mask = mask.reshape(self.img_shape[:2])
+        self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
+
     def load_mask(self, mask_path):
         self.mask = u.crop_center(mpimg.imread(mask_path), self.img_shape[0], self.img_shape[1])
         self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
@@ -164,9 +170,8 @@ class Training:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
 
         # filtered PRNU for computing the NCC
-        self.prnu_4ncc = \
-            loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % ('_comp' if self.args.compressed else '')))[
-                'prnu']
+        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat'
+                                              % ('_comp' if self.args.compressed else '')))['prnu']
         if self.prnu_4ncc.shape != self.img_shape[:2]:
             raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
 
@@ -309,7 +314,8 @@ def _parse_args():
                         help='Run name in ./results/')
     parser.add_argument('--compressed', '-comp', action='store_true',
                         help='Use the JPEG dataset')
-
+    parser.add_argument('--slack', action='store_true',
+                        help='Send a message to slack')
     # network design
     parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -365,7 +371,7 @@ def _parse_args():
                         help='Type of noise for the input tensor')
     parser.add_argument('--noise_std', type=float, default=.1, required=False,
                         help='Standard deviation of the noise for the input tensor')
-    parser.add_argument('--mask_deletion', type=float, default=0., required=False,
+    parser.add_argument('--deletion', type=float, default=0., required=False,
                         help='Deletion rate for the mask in [0,1].')
     parser.add_argument('--attempts', type=int, default=1, required=False,
                         help='Number of attempts to be performed on the same picture.')
@@ -411,14 +417,16 @@ def main():
         for picpath in pic_list:
             for attempt in range(args.attempts):
                 T.load_image(picpath)
+                T._build_mask()
                 T.optimize()
                 T.save_result(attempt)
                 T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
 
-    os.system('python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
-              % ' '.join(sys.argv).split('.py')[-1][1:])
+    if args.slack:
+        os.system('python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
+                  % ' '.join(sys.argv).split('.py')[-1][1:])
 
 
 if __name__ == '__main__':
