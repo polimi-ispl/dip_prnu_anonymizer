@@ -20,6 +20,7 @@ torch.backends.cudnn.deterministic = True
 import architectures as a
 from utils.common_utils import *
 from utils import utils as u
+from utils.wlet import ExtractSingle
 
 from argparse import ArgumentParser
 from collections import namedtuple
@@ -29,7 +30,7 @@ from glob import glob
 import json
 
 # this is defined here because of pickle
-History = namedtuple("History", ['loss', 'psnr', 'ssim', 'ncc_w', 'ncc_d', 'vgg19'])
+History = namedtuple("History", ['loss', 'psnr', 'ssim', 'ncc_w', 'ncc_wgpu', 'ncc_d', 'vgg19'])
 
 
 class Training:
@@ -60,6 +61,8 @@ class Training:
         self.prnu_4ncc = None
         self.prnu_4ncc_tensor = None
         self.out_img = None
+        self.mask = None
+        self.mask_tensor = None
 
         # build input tensors
         self.input_tensor = None
@@ -84,6 +87,8 @@ class Training:
                 average_loss=True,
                 extractor=None
             ).type(self.dtype)
+        if self.args.wgpu:
+            self.WeinerTorch = ExtractSingle(sigma=3/255.).type(self.dtype)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -134,6 +139,10 @@ class Training:
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
+    def load_mask(self, mask_path):
+        self.mask = u.crop_center(mpimg.imread(mask_path), self.img_shape[0], self.img_shape[1])
+        self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
+
     def load_image(self, image_path):
         self.imgpath = image_path
         self.image_name = self.imgpath.split('.')[-2].split('/')[-1]
@@ -176,8 +185,14 @@ class Training:
 
         output_tensor = self.net(input_tensor)
 
+        if self.mask_tensor is not None:
+            output_tensor = self.mask_tensor * output_tensor
+
         if self.args.dncnn > 0. or self.args.nccd:
-            w = self.DnCNN(u.rgb2gray(output_tensor, 1))
+            noise_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
+
+        if self.args.wgpu:
+            noise_wlet = self.WeinerTorch(u.rgb2gray(output_tensor, 1)*255)
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
             mse = self.l2dist(output_tensor, self.img_tensor)
@@ -185,7 +200,7 @@ class Training:
             mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
                               self.img_tensor)
 
-        dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), w) if self.args.dncnn else 0.
+        dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
         perc_loss = self.vgg19loss(input=output_tensor, target=self.img_tensor) if self.args.perc else 0.
 
@@ -200,7 +215,7 @@ class Training:
                  self.history.loss[-1], mse.item())
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
-            self.history.ncc_d.append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), w).item())
+            self.history.ncc_d.append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn).item())
             msg += ', NCC_d = %+.4f' % self.history.ncc_d[-1]
 
         if self.args.perc:
@@ -213,6 +228,10 @@ class Training:
                                         u.prnu.extract_single(u.float2png(out_img), sigma=3)))
         msg += ', PSNR = %2.2f dB, SSIM = %.4f, NCC_w = %+.4f' \
                % (self.history.psnr[-1], self.history.ssim[-1], self.history.ncc_w[-1])
+
+        if self.args.wgpu:
+            self.history.ncc_wgpu.append(u.ncc(self.prnu_4ncc_tensor*u.rgb2gray(output_tensor, 1), noise_wlet))
+            msg += ', NCC_wgpu = %+.4f' % self.history.ncc_wgpu[-1]
 
         print(colored(msg, 'yellow'), '\r', end='')
 
@@ -248,22 +267,23 @@ class Training:
         optimize(self.args.optimizer, self.parameters, self._optimization_loop, self.args.lr, self.args.epochs)
         self.elapsed = time() - start
 
-    def save_result(self):
+    def save_result(self, attempt):
         mydict = {
-            'server': u.machine_name(),
-            'device': os.environ["CUDA_VISIBLE_DEVICES"],
+            'server':       u.machine_name(),
+            'device':       os.environ["CUDA_VISIBLE_DEVICES"],
             'elapsed time': u.sec2time(self.elapsed),
-            # 'run_code': self.outpath[-6:],
-            'history': self.history._asdict(),
-            'args': self.args,
-            'prnu': self.prnu_clean,
-            'image': self.img,
-            'anonymized': self.out_img,
-            'psnr_max': self.psnr_max,
-            'params': self.num_params
+            'history':      self.history._asdict(),
+            'args':         self.args,
+            'prnu':         self.prnu_clean,
+            'image':        self.img,
+            'mask':         self.mask,
+            'anonymized':   self.out_img,
+            'psnr_max':     self.psnr_max,
+            'params':       self.num_params,
+            'attempt':      attempt
         }
-        np.save(os.path.join(self.outpath,
-                             self.image_name.split('/')[-1] + '_run.npy'), mydict)
+        outname = self.image_name.split('/')[-1] + '_run%s.npy' % str(attempt).zfill(u.ten_digit(self.args.attempts))
+        np.save(os.path.join(self.outpath, outname), mydict)
 
     def reset(self):
         self.iiter = 0
@@ -319,6 +339,8 @@ def _parse_args():
                         help='Coefficient for the DnCNN fingerprint extraction loss')
     parser.add_argument('--perc', type=float, required=False, default=0.00,
                         help='Coefficient for the VGG19 perceptual loss')
+    parser.add_argument('--wgpu', type=bool, required=False, default=False,
+                        help='Compute the NCC with GPU implementation of Wiener extraction')
     parser.add_argument('--perc_layers', type=str, required=False, default='1,6,11,20,29',
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
@@ -343,6 +365,11 @@ def _parse_args():
                         help='Type of noise for the input tensor')
     parser.add_argument('--noise_std', type=float, default=.1, required=False,
                         help='Standard deviation of the noise for the input tensor')
+    parser.add_argument('--mask_deletion', type=float, default=0., required=False,
+                        help='Deletion rate for the mask in [0,1].')
+    parser.add_argument('--attempts', type=int, default=1, required=False,
+                        help='Number of attempts to be performed on the same picture.')
+
     return parser.parse_args()
 
 
@@ -382,10 +409,11 @@ def main():
         pic_list = sorted(pic_list)
 
         for picpath in pic_list:
-            T.load_image(picpath)
-            T.optimize()
-            T.save_result()
-            T.reset()
+            for attempt in range(args.attempts):
+                T.load_image(picpath)
+                T.optimize()
+                T.save_result(attempt)
+                T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
 
