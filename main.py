@@ -6,6 +6,7 @@ warnings.filterwarnings("ignore")
 import os
 import torch
 import numpy as np
+import h5py
 import matplotlib.image as mpimg
 from scipy.io import loadmat
 
@@ -39,6 +40,8 @@ class Training:
         self.dtype = dtype
         self.outpath = outpath
         self.img_shape = img_shape
+        self.out_list = []
+        self.attempt = 0
 
         # losses
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
@@ -209,11 +212,12 @@ class Training:
         total_loss = mse + self.args.ssim * ssim_loss + self.args.dncnn * dncnn_loss + self.args.perc * perc_loss
         total_loss.backward()
 
+        # Save and display loss terms
         self.history.loss.append(total_loss.item())
-        self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
-        self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
-        msg = "\tPicture %s,\tIter %s, Loss = %.2e, MSE=%.2e" \
-              % (self.imgpath.split('/')[-1], str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
+        msg = "\tPicture %s,\t%s, \tIter %s, Loss = %.2e, MSE=%.2e" \
+              % (self.imgpath.split('/')[-1],
+                 'Attempt %s' % str(self.attempt).zfill(u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
+                 str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
                  self.history.loss[-1], mse.item())
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
@@ -224,16 +228,28 @@ class Training:
             self.history.vgg19.append(perc_loss.item())
             msg += ', VGG19 = %.2e' % self.history.vgg19[-1]
 
-        # display also evaluation metrics
-        out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
-        self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
-                                        u.prnu.extract_single(u.float2png(out_img), sigma=3)))
-        msg += ', PSNR = %2.2f dB, SSIM = %.4f, NCC_w = %+.4f' \
-               % (self.history.psnr[-1], self.history.ssim[-1], self.history.ncc_w[-1])
+        # Save and display evaluation metrics
+        self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
+        msg += ', PSNR = %2.2f dB' % self.history.psnr[-1]
+
+        self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
+        msg += ', SSIM = %.4f' % self.history.ssim[-1]
 
         if self.args.wgpu:
             self.history.ncc_wgpu.append(u.ncc(self.prnu_4ncc_tensor*u.rgb2gray(output_tensor, 1), noise_wlet))
             msg += ', NCC_wgpu = %+.4f' % self.history.ncc_wgpu[-1]
+
+        # CPU operations
+        if self.args.compute_nccw or self.args.save_all:  # we need to go on CPU
+            out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
+
+            if self.args.compute_nccw:
+                self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
+                                                u.prnu.extract_single(u.float2png(out_img), sigma=3)))
+                msg += ', NCC_w = %+.4f' % self.history.ncc_w[-1]
+
+            if self.args.save_all:
+                self.out_list.append(out_img)
 
         print(colored(msg, 'yellow'), '\r', end='')
 
@@ -284,8 +300,11 @@ class Training:
             'params':       self.num_params,
             'attempt':      attempt
         }
-        outname = self.image_name.split('/')[-1] + '_run%s.npy' % str(attempt).zfill(u.ten_digit(self.args.attempts))
-        np.save(os.path.join(self.outpath, outname), mydict)
+        outname = self.image_name.split('/')[-1] + '_run%s' % str(attempt).zfill(u.ten_digit(self.args.attempts))
+        np.save(os.path.join(self.outpath, outname+'.npy'), mydict)
+
+        with h5py.File(os.path.join(self.outpath, outname+'.hdf5'), 'w') as f:
+            dset = f.create_dataset("all_outputs", data=np.asarray(self.out_list))
 
     def reset(self):
         self.iiter = 0
@@ -295,6 +314,7 @@ class Training:
         self._build_input()
         self._build_model()
         self.history = History._make([list() for _ in History._fields])
+        self.out_list = []
 
 
 def _parse_args():
@@ -313,6 +333,10 @@ def _parse_args():
                         help='Use the JPEG dataset')
     parser.add_argument('--slack', action='store_true',
                         help='Send a message to slack')
+    parser.add_argument('--save_all', type=bool, default=False, required=False,
+                        help='Save every network output.')
+    parser.add_argument('--compute_nccw', type=bool, default=False, required=False,
+                        help='Compute NCC for each epoch (it slows down the training phase as it is done on CPU)')
     # network design
     parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -415,6 +439,7 @@ def main():
             for attempt in range(args.attempts):
                 T.load_image(picpath)
                 T._build_mask()
+                T.attempt = attempt
                 T.optimize()
                 T.save_result(attempt)
                 T.reset()
