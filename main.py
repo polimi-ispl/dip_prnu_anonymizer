@@ -190,9 +190,6 @@ class Training:
 
         output_tensor = self.net(input_tensor)
 
-        if self.mask_tensor is not None:
-            output_tensor = self.mask_tensor * output_tensor
-
         if self.args.dncnn > 0. or self.args.nccd:
             noise_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
 
@@ -200,10 +197,10 @@ class Training:
             noise_wlet = self.WeinerTorch(u.rgb2gray(output_tensor, 1)*255)
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
-            mse = self.l2dist(output_tensor, self.img_tensor)
+            mse = self.l2dist(output_tensor, self.mask_tensor * self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
             mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
-                              self.img_tensor)
+                              self.mask_tensor * self.img_tensor)
 
         dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
