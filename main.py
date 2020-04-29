@@ -24,14 +24,12 @@ from utils import utils as u
 from utils.wlet import ExtractSingle
 
 from argparse import ArgumentParser
-from collections import namedtuple
 from time import time
 from termcolor import colored
 from glob import glob
 import json
 
-# this is defined here because of pickle
-History = namedtuple("History", ['loss', 'psnr', 'ssim', 'ncc_w', 'ncc_wgpu', 'ncc_d', 'vgg19'])
+empty_history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
 
 
 class Training:
@@ -49,7 +47,7 @@ class Training:
         # self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
 
         # training parameters
-        self.history = History._make([list() for _ in History._fields])
+        self.history = empty_history
         self.iiter = 0
         self.saving_interval = 0
         self.psnr_max = 0
@@ -91,7 +89,7 @@ class Training:
                 extractor=None
             ).type(self.dtype)
         if self.args.wgpu:
-            self.WeinerTorch = ExtractSingle(sigma=3/255.).type(self.dtype)
+            self.WeinerTorch = ExtractSingle(sigma=3 / 255.).type(self.dtype)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -142,7 +140,7 @@ class Training:
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
-    def _build_mask(self):
+    def build_mask(self):
         """Create a random mask"""
         mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int)
         self.mask = mask.reshape(self.img_shape[:2])
@@ -197,13 +195,14 @@ class Training:
             noise_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
 
         if self.args.wgpu:
-            noise_wlet = self.WeinerTorch(u.rgb2gray(output_tensor, 1)*255)
+            noise_wlet = self.WeinerTorch(u.rgb2gray(output_tensor, 1) * 255)
 
         if self.args.gamma == 0.:  # MSE between reference image and output image
-            mse = self.l2dist(output_tensor, self.mask_tensor * self.img_tensor)
+            mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
-            mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
-                              self.mask_tensor * self.img_tensor)
+            mse = self.l2dist(
+                self.mask_tensor * u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
+                self.mask_tensor * self.img_tensor)
 
         dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
@@ -213,40 +212,41 @@ class Training:
         total_loss.backward()
 
         # Save and display loss terms
-        self.history.loss.append(total_loss.item())
+        self.history['loss'].append(total_loss.item())
         msg = "\tPicture %s,\t%s, \tIter %s, Loss = %.2e, MSE=%.2e" \
               % (self.imgpath.split('/')[-1],
-                 'Attempt %s' % str(self.attempt).zfill(u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
+                 'Attempt %s' % str(self.attempt).zfill(
+                     u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
                  str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
-                 self.history.loss[-1], mse.item())
+                 self.history['loss'][-1], mse.item())
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
-            self.history.ncc_d.append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn).item())
-            msg += ', NCC_d = %+.4f' % self.history.ncc_d[-1]
+            self.history['ncc_d'].append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn).item())
+            msg += ', NCC_d = %+.4f' % self.history['ncc_d'][-1]
 
         if self.args.perc:
-            self.history.vgg19.append(perc_loss.item())
-            msg += ', VGG19 = %.2e' % self.history.vgg19[-1]
+            self.history['vgg19'].append(perc_loss.item())
+            msg += ', VGG19 = %.2e' % self.history['vgg19'][-1]
 
         # Save and display evaluation metrics
-        self.history.psnr.append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
-        msg += ', PSNR = %2.2f dB' % self.history.psnr[-1]
+        self.history['psnr'].append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
+        msg += ', PSNR = %2.2f dB' % self.history['psnr'][-1]
 
-        self.history.ssim.append(u.ssim(self.img_tensor, output_tensor).item())
-        msg += ', SSIM = %.4f' % self.history.ssim[-1]
+        self.history['ssim'].append(u.ssim(self.img_tensor, output_tensor).item())
+        msg += ', SSIM = %.4f' % self.history['ssim'][-1]
 
         if self.args.wgpu:
-            self.history.ncc_wgpu.append(u.ncc(self.prnu_4ncc_tensor*u.rgb2gray(output_tensor, 1), noise_wlet))
-            msg += ', NCC_wgpu = %+.4f' % self.history.ncc_wgpu[-1]
+            self.history['ncc_wgpu'].append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_wlet))
+            msg += ', NCC_wgpu = %+.4f' % self.history['ncc_wgpu'][-1]
 
         # CPU operations
         if self.args.compute_nccw or self.args.save_all:  # we need to go on CPU
             out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
 
             if self.args.compute_nccw:
-                self.history.ncc_w.append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
+                self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
                                                 u.prnu.extract_single(u.float2png(out_img), sigma=3)))
-                msg += ', NCC_w = %+.4f' % self.history.ncc_w[-1]
+                msg += ', NCC_w = %+.4f' % self.history['ncc_w'][-1]
 
             if self.args.save_all:
                 self.out_list.append(out_img)
@@ -254,8 +254,8 @@ class Training:
         print(colored(msg, 'yellow'), '\r', end='')
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
-        if self.psnr_max < self.history.psnr[-1]:
-            self.psnr_max = self.history.psnr[-1]
+        if self.psnr_max < self.history['psnr'][-1]:
+            self.psnr_max = self.history['psnr'][-1]
             if self.args.save_png_every and \
                     self.psnr_max > self.args.psnr_min and \
                     self.iiter > 0 \
@@ -263,7 +263,7 @@ class Training:
                 self.out_img = out_img
                 outname = self.image_name + \
                           '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-                          '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_w[-1])
+                          '_psnr%.2f_nccw%.6f.png' % (self.history['psnr'][-1], self.history['ncc_w'][-1])
                 Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
                 self.saving_interval = 0
 
@@ -272,7 +272,7 @@ class Training:
             self.out_img = out_img
             outname = self.image_name + \
                       '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-                      '_psnr%.2f_nccw%.6f.png' % (self.history.psnr[-1], self.history.ncc_w[-1])
+                      '_psnr%.2f_nccw%.6f.png' % (self.history['psnr'][-1], self.history['ncc_w'][-1])
             Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
 
         self.iiter += 1
@@ -287,24 +287,29 @@ class Training:
 
     def save_result(self, attempt):
         mydict = {
-            'server':       u.machine_name(),
-            'device':       os.environ["CUDA_VISIBLE_DEVICES"],
+            'server': u.machine_name(),
+            'device': os.environ["CUDA_VISIBLE_DEVICES"],
             'elapsed time': u.sec2time(self.elapsed),
-            'history':      self.history._asdict(),
-            'args':         self.args,
-            'prnu':         self.prnu_clean,
-            'image':        self.img,
-            'mask':         self.mask,
-            'anonymized':   self.out_img,
-            'psnr_max':     self.psnr_max,
-            'params':       self.num_params,
-            'attempt':      attempt
+            'history': self.history,
+            'args': self.args,
+            'prnu': self.prnu_clean,
+            'image': self.img,
+            'mask': self.mask,
+            'anonymized': self.out_img,
+            'psnr_max': self.psnr_max,
+            'params': self.num_params,
+            'attempt': attempt
         }
         outname = self.image_name.split('/')[-1] + '_run%s' % str(attempt).zfill(u.ten_digit(self.args.attempts))
-        np.save(os.path.join(self.outpath, outname+'.npy'), mydict)
+        np.save(os.path.join(self.outpath, outname + '.npy'), mydict)
 
-        with h5py.File(os.path.join(self.outpath, outname+'.hdf5'), 'w') as f:
+        with h5py.File(os.path.join(self.outpath, outname + '.hdf5'), 'w') as f:
             dset = f.create_dataset("all_outputs", data=np.asarray(self.out_list))
+
+    def compute_nccw(self):
+        self.history['ncc_w'] = [u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out)),
+                                       u.prnu.extract_single(u.float2png(out), sigma=3))
+                                 for out in self.out_list]
 
     def reset(self):
         self.iiter = 0
@@ -313,7 +318,7 @@ class Training:
         torch.cuda.empty_cache()
         self._build_input()
         self._build_model()
-        self.history = History._make([list() for _ in History._fields])
+        self.history = empty_history
         self.out_list = []
 
 
@@ -336,7 +341,7 @@ def _parse_args():
     parser.add_argument('--save_all', type=bool, default=False, required=False,
                         help='Save every network output.')
     parser.add_argument('--compute_nccw', type=bool, default=False, required=False,
-                        help='Compute NCC for each epoch (it slows down the training phase as it is done on CPU)')
+                        help='Compute NCC at runtime (it slows down the training phase as it is done on CPU)')
     # network design
     parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -438,17 +443,20 @@ def main():
         for picpath in pic_list:
             for attempt in range(args.attempts):
                 T.load_image(picpath)
-                T._build_mask()
+                T.build_mask()
                 T.attempt = attempt
                 T.optimize()
+                if (not args.compute_nccw) and args.save_all:
+                    T.compute_nccw()
                 T.save_result(attempt)
                 T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
 
     if args.slack:
-        os.system('python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
-                  % ' '.join(sys.argv).split('.py')[-1][1:])
+        os.system(
+            'python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
+            % ' '.join(sys.argv).split('.py')[-1][1:])
 
 
 if __name__ == '__main__':
