@@ -9,14 +9,13 @@ import numpy as np
 import h5py
 import matplotlib.image as mpimg
 from scipy.io import loadmat
+from skimage.feature import canny
+from skimage.morphology import binary_dilation
+from tqdm import trange
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
-seed = 0
-np.random.seed(seed)
-torch.manual_seed(seed)
-torch.cuda.manual_seed(seed)
 torch.backends.cudnn.deterministic = True
 import architectures as a
 from utils.common_utils import *
@@ -28,6 +27,13 @@ from time import time
 from termcolor import colored
 from glob import glob
 import json
+
+
+def _set_seed(seed=0):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
 
 empty_history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
 
@@ -47,7 +53,7 @@ class Training:
         # self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
 
         # training parameters
-        self.history = empty_history
+        self.history = empty_history.copy()
         self.iiter = 0
         self.saving_interval = 0
         self.psnr_max = 0
@@ -64,6 +70,7 @@ class Training:
         self.out_img = None
         self.mask = None
         self.mask_tensor = None
+        self.edges = None
 
         # build input tensors
         self.input_tensor = None
@@ -75,7 +82,7 @@ class Training:
         self.net = None
         self.parameters = None
         self.num_params = None
-        self._build_model()
+
         if self.args.dncnn > 0. or self.args.nccd:
             self.DnCNN = a.DnCNN().to(self.input_tensor.device)
         if self.args.perc > 0.:
@@ -140,10 +147,25 @@ class Training:
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
-    def build_mask(self):
-        """Create a random mask"""
-        mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int)
-        self.mask = mask.reshape(self.img_shape[:2])
+    def build_mask(self, edges_only=False, sigma=3):
+        """Create a random mask either on the whole image or only on the edges"""
+        if edges_only:
+            if self.edges is None:
+                self._extract_edges(sigma)
+            rnd = (np.random.rand(np.sum(self.edges)) > self.args.deletion).astype(int)
+            randomized_edge = np.ones_like(self.edges).astype(int)
+            i = 0
+            for r in range(self.edges.shape[0]):
+                for c in range(self.edges.shape[1]):
+                    if self.edges[r, c] == 1:
+                        # print('edge in (%d, %d)' % (r, c))
+                        randomized_edge[r, c] = rnd[i]
+                        i += 1
+
+            self.mask = randomized_edge.reshape(self.edges.shape)
+        else:
+            mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int)
+            self.mask = mask.reshape(self.img_shape[:2])
         self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
 
     def load_mask(self, mask_path):
@@ -180,6 +202,9 @@ class Training:
         self.prnu_clean_tensor = u.numpy2torch(self.prnu_clean[np.newaxis, np.newaxis])
         self.prnu_4ncc_tensor = u.numpy2torch(self.prnu_4ncc[np.newaxis, np.newaxis])
 
+    def _extract_edges(self, sigma=3):
+        self.edges = binary_dilation(canny(u.rgb2gray(self.img), sigma=sigma))
+
     def _optimization_loop(self):
         if self.args.param_noise:
             for n in [x for x in self.net.parameters() if len(x.size()) == 4]:
@@ -213,7 +238,7 @@ class Training:
 
         # Save and display loss terms
         self.history['loss'].append(total_loss.item())
-        msg = "\tPicture %s,\t%s, \tIter %s, Loss = %.2e, MSE=%.2e" \
+        msg = "\tPicture %s,\t%s, \tIter %s, Loss=%.2e, MSE=%.2e" \
               % (self.imgpath.split('/')[-1],
                  'Attempt %s' % str(self.attempt).zfill(
                      u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
@@ -222,34 +247,32 @@ class Training:
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
             self.history['ncc_d'].append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn).item())
-            msg += ', NCC_d = %+.4f' % self.history['ncc_d'][-1]
+            msg += ', NCC_d=%+.4f' % self.history['ncc_d'][-1]
 
         if self.args.perc:
             self.history['vgg19'].append(perc_loss.item())
-            msg += ', VGG19 = %.2e' % self.history['vgg19'][-1]
+            msg += ', VGG19=%.2e' % self.history['vgg19'][-1]
 
         # Save and display evaluation metrics
         self.history['psnr'].append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
-        msg += ', PSNR = %2.2f dB' % self.history['psnr'][-1]
+        msg += ', PSNR=%2.2f dB' % self.history['psnr'][-1]
 
         self.history['ssim'].append(u.ssim(self.img_tensor, output_tensor).item())
-        msg += ', SSIM = %.4f' % self.history['ssim'][-1]
+        msg += ', SSIM=%.4f' % self.history['ssim'][-1]
 
         if self.args.wgpu:
             self.history['ncc_wgpu'].append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_wlet))
-            msg += ', NCC_wgpu = %+.4f' % self.history['ncc_wgpu'][-1]
+            msg += ', NCC_wgpu=%+.4f' % self.history['ncc_wgpu'][-1]
 
         # CPU operations
-        if self.args.compute_nccw or self.args.save_all:  # we need to go on CPU
-            out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
+        out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
 
-            if self.args.compute_nccw:
-                self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
-                                                u.prnu.extract_single(u.float2png(out_img), sigma=3)))
-                msg += ', NCC_w = %+.4f' % self.history['ncc_w'][-1]
-
-            if self.args.save_all:
-                self.out_list.append(out_img)
+        if self.args.nccw_runtime:
+            self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
+                                            u.prnu.extract_single(u.float2png(out_img), sigma=3)))
+            msg += ', NCC_w=%+.4f' % self.history['ncc_w'][-1]
+        else:
+            self.out_list.append(out_img)
 
         print(colored(msg, 'yellow'), '\r', end='')
 
@@ -285,7 +308,7 @@ class Training:
         optimize(self.args.optimizer, self.parameters, self._optimization_loop, self.args.lr, self.args.epochs)
         self.elapsed = time() - start
 
-    def save_result(self, attempt):
+    def save_result(self, attempt, save_images=False):
         mydict = {
             'server': u.machine_name(),
             'device': os.environ["CUDA_VISIBLE_DEVICES"],
@@ -293,8 +316,10 @@ class Training:
             'history': self.history,
             'args': self.args,
             'prnu': self.prnu_clean,
+            'prnu4ncc': self.prnu_4ncc,
             'image': self.img,
             'mask': self.mask,
+            'edge': self.edges,
             'anonymized': self.out_img,
             'psnr_max': self.psnr_max,
             'params': self.num_params,
@@ -303,13 +328,18 @@ class Training:
         outname = self.image_name.split('/')[-1] + '_run%s' % str(attempt).zfill(u.ten_digit(self.args.attempts))
         np.save(os.path.join(self.outpath, outname + '.npy'), mydict)
 
-        with h5py.File(os.path.join(self.outpath, outname + '.hdf5'), 'w') as f:
-            dset = f.create_dataset("all_outputs", data=np.asarray(self.out_list))
+        if save_images:
+            with h5py.File(os.path.join(self.outpath, outname + '.hdf5'), 'w') as f:
+                dset = f.create_dataset("all_outputs", data=np.asarray(self.out_list))
 
     def compute_nccw(self):
-        self.history['ncc_w'] = [u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out)),
-                                       u.prnu.extract_single(u.float2png(out), sigma=3))
-                                 for out in self.out_list]
+        assert len(self.out_list) > 0, "Out list is empty"
+        self.history['ncc_w'] = []
+        # print('\n')
+        for o in trange(len(self.out_list), ncols=90,  unit='epoch',
+                        desc='\tComputing NCC'):
+            self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(self.out_list[o])),
+                                         u.prnu.extract_single(u.float2png(self.out_list[o]), sigma=3)))
 
     def reset(self):
         self.iiter = 0
@@ -318,8 +348,10 @@ class Training:
         torch.cuda.empty_cache()
         self._build_input()
         self._build_model()
-        self.history = empty_history
+        self.history = empty_history.copy()
         self.out_list = []
+        self.mask = None
+        self.edges = None
 
 
 def _parse_args():
@@ -338,10 +370,12 @@ def _parse_args():
                         help='Use the JPEG dataset')
     parser.add_argument('--slack', action='store_true',
                         help='Send a message to slack')
-    parser.add_argument('--save_all', type=bool, default=False, required=False,
-                        help='Save every network output.')
-    parser.add_argument('--compute_nccw', type=bool, default=False, required=False,
+    parser.add_argument('--save_outputs', type=bool, default=False, required=False,
+                        help='Save every network output to disk in a hdf5 file.')
+    parser.add_argument('--nccw_runtime', type=bool, default=False, required=False,
                         help='Compute NCC at runtime (it slows down the training phase as it is done on CPU)')
+    parser.add_argument('--seeds', nargs='+', type=int, required=False,
+                        help='Random Seed list for each attempt (default 0 for every attempt).')
     # network design
     parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -399,10 +433,21 @@ def _parse_args():
                         help='Standard deviation of the noise for the input tensor')
     parser.add_argument('--deletion', type=float, default=0., required=False,
                         help='Deletion rate for the mask in [0,1].')
+    parser.add_argument('--delete_edges', type=bool, default=False, required=False,
+                        help='Build the mask on the edges only.')
+    parser.add_argument('--edges_sigma', type=float, default=3., required=False,
+                        help='Sigma value for edge detection canny algorithm.')
     parser.add_argument('--attempts', type=int, default=1, required=False,
                         help='Number of attempts to be performed on the same picture.')
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.seeds is None:
+        args.seeds = [0] * args.attempts
+    elif len(args.seeds) == 1:
+        args.seeds = [args.seeds[0]] * args.attempts
+    assert len(args.seeds) == args.attempts, 'Provided seed list has to have a length of the attempts'
+
+    return args
 
 
 def main():
@@ -442,13 +487,15 @@ def main():
 
         for picpath in pic_list:
             for attempt in range(args.attempts):
+                _set_seed(args.seeds[attempt])
+                T._build_model()
                 T.load_image(picpath)
-                T.build_mask()
+                T.build_mask(edges_only=args.delete_edges, sigma=args.edges_sigma)
                 T.attempt = attempt
                 T.optimize()
-                if (not args.compute_nccw) and args.save_all:
+                if not args.nccw_runtime:  # compute NCC on CPU at the end of the optimization
                     T.compute_nccw()
-                T.save_result(attempt)
+                T.save_result(attempt, args.save_outputs)
                 T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
