@@ -35,9 +35,6 @@ def _set_seed(seed=0):
     torch.cuda.manual_seed(seed)
 
 
-empty_history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
-
-
 class Training:
     def __init__(self, args, dtype, outpath, img_shape=(512, 512, 3)):
         self.args = args
@@ -53,7 +50,7 @@ class Training:
         # self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
 
         # training parameters
-        self.history = empty_history.copy()
+        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
         self.iiter = 0
         self.saving_interval = 0
         self.psnr_max = 0
@@ -335,7 +332,7 @@ class Training:
     def compute_nccw(self):
         assert len(self.out_list) > 0, "Out list is empty"
         self.history['ncc_w'] = []
-        # print('\n')
+        print('\n')
         for o in trange(len(self.out_list), ncols=90,  unit='epoch',
                         desc='\tComputing NCC'):
             self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(self.out_list[o])),
@@ -348,7 +345,7 @@ class Training:
         torch.cuda.empty_cache()
         self._build_input()
         self._build_model()
-        self.history = empty_history.copy()
+        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
         self.out_list = []
         self.mask = None
         self.edges = None
