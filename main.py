@@ -144,9 +144,10 @@ class Training:
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
-    def build_mask(self, edges_only=False, sigma=3):
-        """Create a random mask either on the whole image or only on the edges"""
-        if edges_only:
+    def build_mask(self, strategy='all', sigma=3):
+        """Create a random mask either on the whole image or on the edges or on the flat zones"""
+
+        if strategy == 'edge':
             if self.edges is None:
                 self._extract_edges(sigma)
             rnd = (np.random.rand(np.sum(self.edges)) > self.args.deletion).astype(int)
@@ -160,10 +161,25 @@ class Training:
                         i += 1
 
             self.mask = randomized_edge.reshape(self.edges.shape)
-        else:
+            self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
+
+        elif strategy == 'flat':
+            if self.edges is None:
+                self._extract_edges(sigma)
+            self.mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int).reshape(self.img_shape[:2])
+            for r in range(self.edges.shape[0]):
+                for c in range(self.edges.shape[1]):
+                    if self.edges[r, c] == 1:
+                        self.mask[r, c] = 1
+            self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
+
+        elif strategy == 'all':
             mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int)
             self.mask = mask.reshape(self.img_shape[:2])
-        self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
+            self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
+
+        else:
+            raise ValueError('Invalid strategy for random mask generation')
 
     def load_mask(self, mask_path):
         self.mask = u.crop_center(mpimg.imread(mask_path), self.img_shape[0], self.img_shape[1])
@@ -361,6 +377,8 @@ def _parse_args():
     parser.add_argument('--pics_idx', nargs='+', type=int, required=False,
                         help='indeces of the first and last pictures to be processed'
                              '(e.g. 10, 15 to process images from the 10th to the 15th)')
+    parser.add_argument('--pics_IDs', nargs='+', type=str, required=False,
+                        help='5-long code of the picture to be loaded')
     parser.add_argument('--outpath', type=str, required=False, default='debug',
                         help='Run name in ./results/')
     parser.add_argument('--compressed', '-comp', action='store_true',
@@ -430,8 +448,8 @@ def _parse_args():
                         help='Standard deviation of the noise for the input tensor')
     parser.add_argument('--deletion', type=float, default=0., required=False,
                         help='Deletion rate for the mask in [0,1].')
-    parser.add_argument('--delete_edges', type=bool, default=False, required=False,
-                        help='Build the mask on the edges only.')
+    parser.add_argument('--mask_strategy', type=str, default='all', required=False, choices=['all', 'edges', 'flat'],
+                        help='Build the random mask upon the edges, the flat zones or the whole image.')
     parser.add_argument('--edges_sigma', type=float, default=3., required=False,
                         help='Sigma value for edge detection canny algorithm.')
     parser.add_argument('--attempts', type=int, default=1, required=False,
@@ -476,18 +494,24 @@ def main():
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
 
         T.load_prnu(device)
-        if args.compressed:
-            pic_list = glob(os.path.join(device, '*.JPG'))[pics_idx[0]:pics_idx[-1]]
+
+        if args.pics_IDs is not None:  # load specified image
+            pic_list = [os.path.join(device, device.split('/')[-1] + '_%s.%s'
+                                     % (_, 'JPG' if args.compressed else 'png'))
+                        for _ in args.pics_IDs]
         else:
-            pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
-        pic_list = sorted(pic_list)
+            if args.compressed:
+                pic_list = glob(os.path.join(device, '*.JPG'))[pics_idx[0]:pics_idx[-1]]
+            else:
+                pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
+            pic_list = sorted(pic_list)
 
         for picpath in pic_list:
             for attempt in range(args.attempts):
                 _set_seed(args.seeds[attempt])
                 T._build_model()
                 T.load_image(picpath)
-                T.build_mask(edges_only=args.delete_edges, sigma=args.edges_sigma)
+                T.build_mask(strategy=args.mask_strategy, sigma=args.edges_sigma)
                 T.attempt = attempt
                 T.optimize()
                 if not args.nccw_runtime:  # compute NCC on CPU at the end of the optimization
