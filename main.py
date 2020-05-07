@@ -219,9 +219,10 @@ class Training:
         self.edges = binary_dilation(canny(u.rgb2gray(self.img), sigma=sigma))
 
     def _optimization_loop(self):
-        if self.args.param_noise:
+        if self.args.param_noise:  # TODO it does not work
             for n in [x for x in self.net.parameters() if len(x.size()) == 4]:
-                n += n.detach().clone().normal_() * n.std() / 50
+                _n = n.detach().clone().normal_(std=float(n.std())/50)
+                n = n + _n
 
         input_tensor = self.input_tensor_old
         if self.args.reg_noise_std > 0:
@@ -251,9 +252,9 @@ class Training:
 
         # Save and display loss terms
         self.history['loss'].append(total_loss.item())
-        msg = "\tPicture %s,\t%s, \tIter %s, Loss=%.2e, MSE=%.2e" \
+        msg = "\tPicture %s\t%s \tIter %s, Loss=%.2e, MSE=%.2e" \
               % (self.imgpath.split('/')[-1],
-                 'Attempt %s' % str(self.attempt).zfill(
+                 'Attempt %s,' % str(self.attempt).zfill(
                      u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
                  str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
                  self.history['loss'][-1], mse.item())
@@ -297,19 +298,15 @@ class Training:
                     self.iiter > 0 \
                     and self.saving_interval >= self.args.save_png_every:
                 self.out_img = out_img
-                outname = self.image_name + \
-                          '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-                          '_psnr%.2f_nccw%.6f.png' % (self.history['psnr'][-1], self.history['ncc_w'][-1])
+                outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
                 Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
                 self.saving_interval = 0
 
         # save last image if none of the above conditions are respected
-        if self.out_img is None and self.iiter == self.args.epochs:
-            self.out_img = out_img
-            outname = self.image_name + \
-                      '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs)) + \
-                      '_psnr%.2f_nccw%.6f.png' % (self.history['psnr'][-1], self.history['ncc_w'][-1])
-            Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
+        # if self.out_img is None and self.iiter == self.args.epochs:
+        #     self.out_img = out_img
+        #     outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
+        #     Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
 
         self.iiter += 1
         self.saving_interval += 1
@@ -318,7 +315,7 @@ class Training:
 
     def optimize(self):
         start = time()
-        optimize(self.args.optimizer, self.parameters, self._optimization_loop, self.args.lr, self.args.epochs)
+        optimize(self.parameters, self._optimization_loop, self.args)
         self.elapsed = time() - start
 
     def save_result(self, attempt, save_images=False):
@@ -372,6 +369,8 @@ def _parse_args():
     # dataset parameter
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
                         help='Device name in ./dataset/ folder')
+    parser.add_argument('--small', action='store_true',
+                        help='Use small dataset')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
     parser.add_argument('--pics_idx', nargs='+', type=int, required=False,
@@ -426,10 +425,6 @@ def _parse_args():
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
-    parser.add_argument('--disc', type=float, required=False, default=0.00,
-                        help='Coefficient for the Discriminator')
-    parser.add_argument('--softlabels', action='store_true',
-                        help='Use soft labels for the discriminator')
     parser.add_argument('--epochs', '-e', type=int, required=False, default=3001,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
@@ -454,7 +449,14 @@ def _parse_args():
                         help='Sigma value for edge detection canny algorithm.')
     parser.add_argument('--attempts', type=int, default=1, required=False,
                         help='Number of attempts to be performed on the same picture.')
-
+    parser.add_argument('--use_scheduler', type=bool, default=True, required=False,
+                        help='Use ReduceLROnPlateau scheduler.')
+    parser.add_argument('--lr_factor', type=float, default=.1, required=False,
+                        help='LR reduction for Plateau scheduler.')
+    parser.add_argument('--lr_thresh', type=float, default=1e-4, required=False,
+                        help='LR threshold for Plateau scheduler.')
+    parser.add_argument('--lr_patience', type=int, default=10, required=False,
+                        help='LR patience for Plateau scheduler.')
     args = parser.parse_args()
     if args.seeds is None:
         args.seeds = [0] * args.attempts
@@ -481,12 +483,17 @@ def main():
 
     T = Training(args, dtype, outpath)
 
+    if args.small:
+        dataset = 'dataset_small'
+    else:
+        dataset = 'dataset'
+
     if args.device == 'all':
-        device_list = glob('dataset/*')
+        device_list = glob(os.path.join(dataset, '*'))
     elif isinstance(args.device, list):
-        device_list = [os.path.join('dataset', d) for d in args.device]
+        device_list = [os.path.join(dataset, d) for d in args.device]
     elif isinstance(args.device, str):
-        device_list = [os.path.join('dataset', args.device)]
+        device_list = [os.path.join(dataset, args.device)]
     device_list = sorted(device_list)
 
     pics_idx = args.pics_idx if args.pics_idx is not None else [0, None]  # all the pictures

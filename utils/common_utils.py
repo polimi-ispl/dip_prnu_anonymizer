@@ -169,46 +169,66 @@ def torch_to_np(img_var):
     return img_var.detach().cpu().numpy()[0]
 
 
-def optimize(optimizer_type, parameters, closure, LR, num_iter):
+def optimize(parameters, closure_func, args):
     """Runs optimization loop.
 
     Args:
         optimizer_type: 'LBFGS' of 'adam'
         parameters: list of Tensors to optimize over
-        closure: function that returns loss variable
+        closure_func: function that returns loss variable
         LR: learning rate
         num_iter: number of iterations 
     """
-    if optimizer_type in ['LBFGS', 'lbfgs']:
+
+    def _get_scheduler(optimizer, args):
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                          mode='min',
+                                                          factor=args.lr_factor,
+                                                          threshold=args.lr_thresh,
+                                                          patience=args.lr_patience)
+
+    if args.optimizer in ['LBFGS', 'lbfgs']:
         # Do several steps with adam first
-        optimizer = torch.optim.Adam(parameters, lr=0.001)
+        optimizer = torch.optim.Adam(parameters, lr=0.001, amsgrad=True)
+        if args.use_scheduler:
+            sched = _get_scheduler(optimizer,  args)
         for j in range(100):
             optimizer.zero_grad()
-            closure()
+            closure_func()
             optimizer.step()
+            if args.use_scheduler:
+                sched.step()
         # print('Starting optimization with LBFGS')
 
         def closure2():
             optimizer.zero_grad()
-            return closure()
-        optimizer = torch.optim.LBFGS(parameters, max_iter=num_iter, lr=LR, tolerance_grad=-1, tolerance_change=-1)
+            return closure_func()
+        optimizer = torch.optim.LBFGS(parameters, max_iter=args.epochs, lr=args.lr, tolerance_grad=-1, tolerance_change=-1)
         optimizer.step(closure2)
     
-    elif optimizer_type == 'adam':
+    elif args.optimizer == 'adam':
         # print('Starting optimization with ADAM')
-        optimizer = torch.optim.Adam(parameters, lr=LR)
-        for j in range(num_iter):
+        optimizer = torch.optim.Adam(parameters, lr=args.lr, amsgrad=True)
+        if args.use_scheduler:
+            sched = _get_scheduler(optimizer,  args)
+        for j in range(args.epochs):
             optimizer.zero_grad()
-            closure()
+            loss = closure_func()
             optimizer.step()
+            if args.use_scheduler:
+                sched.step(loss)
 
-    elif optimizer_type == 'sgd':
+    elif args.optimizer == 'sgd':
         # print('Starting optimization with SGD')
-        optimizer = torch.optim.SGD(parameters, lr=LR, momentum=0, dampening=0, weight_decay=0, nesterov=False)
-        for j in range(num_iter):
+        optimizer = torch.optim.SGD(parameters, lr=args.lr, momentum=0, dampening=0, weight_decay=0, nesterov=False)
+        if args.use_scheduler:
+            sched = _get_scheduler(optimizer,  args)
+        for j in range(args.epochs):
             optimizer.zero_grad()
-            closure()
+            closure_func()
             optimizer.step()
+            if args.use_scheduler:
+                sched.step()
     else:
         assert False
 
