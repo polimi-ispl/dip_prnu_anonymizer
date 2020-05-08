@@ -20,7 +20,6 @@ torch.backends.cudnn.deterministic = True
 import architectures as a
 from utils.common_utils import *
 from utils import utils as u
-from utils.wlet import ExtractSingle
 
 from argparse import ArgumentParser
 from time import time
@@ -92,8 +91,6 @@ class Training:
                 average_loss=True,
                 extractor=None
             ).type(self.dtype)
-        if self.args.wgpu:
-            self.WeinerTorch = ExtractSingle(sigma=3 / 255.).type(self.dtype)
 
     def _build_input(self):
         self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
@@ -274,10 +271,6 @@ class Training:
         self.history['ssim'].append(u.ssim(self.img_tensor, output_tensor).item())
         msg += ', SSIM=%.4f' % self.history['ssim'][-1]
 
-        if self.args.wgpu:
-            self.history['ncc_wgpu'].append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_wlet))
-            msg += ', NCC_wgpu=%+.4f' % self.history['ncc_wgpu'][-1]
-
         # CPU operations
         out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
 
@@ -303,8 +296,8 @@ class Training:
                 self.saving_interval = 0
 
         # save last image if none of the above conditions are respected
-        # if self.out_img is None and self.iiter == self.args.epochs:
-        #     self.out_img = out_img
+        if self.out_img is None and self.iiter == self.args.epochs:
+            self.out_img = out_img
         #     outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
         #     Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
 
@@ -419,8 +412,6 @@ def _parse_args():
                         help='Coefficient for the DnCNN fingerprint extraction loss')
     parser.add_argument('--perc', type=float, required=False, default=0.00,
                         help='Coefficient for the VGG19 perceptual loss')
-    parser.add_argument('--wgpu', type=bool, required=False, default=False,
-                        help='Compute the NCC with GPU implementation of Wiener extraction')
     parser.add_argument('--perc_layers', type=str, required=False, default='1,6,11,20,29',
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
@@ -449,7 +440,7 @@ def _parse_args():
                         help='Sigma value for edge detection canny algorithm.')
     parser.add_argument('--attempts', type=int, default=1, required=False,
                         help='Number of attempts to be performed on the same picture.')
-    parser.add_argument('--use_scheduler', type=bool, default=True, required=False,
+    parser.add_argument('--use_scheduler', action='store_true',
                         help='Use ReduceLROnPlateau scheduler.')
     parser.add_argument('--lr_factor', type=float, default=.1, required=False,
                         help='LR reduction for Plateau scheduler.')

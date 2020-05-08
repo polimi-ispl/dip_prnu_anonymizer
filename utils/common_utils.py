@@ -225,10 +225,10 @@ def optimize(parameters, closure_func, args):
             sched = _get_scheduler(optimizer,  args)
         for j in range(args.epochs):
             optimizer.zero_grad()
-            closure_func()
+            loss = closure_func()
             optimizer.step()
             if args.use_scheduler:
-                sched.step()
+                sched.step(loss)
     else:
         assert False
 
