@@ -1,6 +1,8 @@
 from __future__ import print_function
 import warnings
 
+from torch.nn.utils import clip_grad_value_
+
 warnings.filterwarnings("ignore")
 
 import os
@@ -46,10 +48,9 @@ class Training:
         # losses
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
         self.ssim = a.SSIMLoss().type(self.dtype)
-        # self.kldiv = torch.nn.KLDivLoss().type(self.dtype)
 
         # training parameters
-        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
+        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_d': [], 'vgg19': []}
         self.iiter = 0
         self.saving_interval = 0
         self.psnr_max = 0
@@ -78,6 +79,8 @@ class Training:
         self.net = None
         self.parameters = None
         self.num_params = None
+        self.scheduler = None
+        self.optimizer = None
 
         if self.args.dncnn > 0. or self.args.nccd:
             self.DnCNN = a.DnCNN().to(self.input_tensor.device)
@@ -185,6 +188,7 @@ class Training:
     def load_image(self, image_path):
         self.imgpath = image_path
         self.image_name = self.imgpath.split('.')[-2].split('/')[-1]
+
         # if PNG, imread normalizes to 0, 1
         # if JPEG, we must do it by hand
         self.img = u.crop_center(mpimg.imread(image_path), self.img_shape[0], self.img_shape[1])
@@ -230,9 +234,6 @@ class Training:
         if self.args.dncnn > 0. or self.args.nccd:
             noise_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
 
-        if self.args.wgpu:
-            noise_wlet = self.WeinerTorch(u.rgb2gray(output_tensor, 1) * 255)
-
         if self.args.gamma == 0.:  # MSE between reference image and output image
             mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
         else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
@@ -246,6 +247,10 @@ class Training:
 
         total_loss = mse + self.args.ssim * ssim_loss + self.args.dncnn * dncnn_loss + self.args.perc * perc_loss
         total_loss.backward()
+
+        # gradient clipping
+        if self.args.gradient_clip is not None:
+            clip_grad_value_(self.net.parameters(), self.args.gradient_clip)
 
         # Save and display loss terms
         self.history['loss'].append(total_loss.item())
@@ -276,12 +281,23 @@ class Training:
 
         if self.args.nccw_runtime:
             self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
-                                            u.prnu.extract_single(u.float2png(out_img), sigma=3)))
+                                         u.prnu.extract_single(u.float2png(out_img), sigma=3)))
             msg += ', NCC_w=%+.4f' % self.history['ncc_w'][-1]
         else:
             self.out_list.append(out_img)
 
         print(colored(msg, 'yellow'), '\r', end='')
+
+        # model checkpoint
+        if self.iiter > 0:
+            if self.history['loss'][-1] < self.history['loss'][-2]:
+                self._save_model(self.history['loss'][-1])
+            else:  # load last best model
+                checkpoint = torch.load(self.checkpoint_file)
+                self.net.load_state_dict(checkpoint['net'])
+                self.optimizer.load_state_dict(checkpoint['opt'])
+                if self.scheduler:
+                    self.scheduler.load_state_dict(checkpoint['sched'])
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history['psnr'][-1]:
@@ -306,9 +322,57 @@ class Training:
 
         return total_loss
 
+    def _build_scheduler(self, optimizer):
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
+                                                                    factor=self.args.lr_factor,
+                                                                    threshold=self.args.lr_thresh,
+                                                                    patience=self.args.lr_patience)
+
     def optimize(self):
         start = time()
-        optimize(self.parameters, self._optimization_loop, self.args)
+        # optimize(self.parameters, self._optimization_loop, self.args)
+
+        if self.args.optimizer in ['LBFGS', 'lbfgs']:
+            # Do several steps with adam first
+            optimizer = torch.optim.Adam(self.parameters, lr=0.001, amsgrad=True)
+            for j in range(100):
+                optimizer.zero_grad()
+                self._optimization_loop()
+                optimizer.step()
+
+            def closure2():
+                optimizer.zero_grad()
+                return self._optimization_loop()
+
+            self.optimizer = torch.optim.LBFGS(self.parameters, max_iter=self.args.epochs, lr=self.args.lr,
+                                               tolerance_grad=-1, tolerance_change=-1)
+            self.optimizer.step(closure2)
+
+        elif self.args.optimizer == 'adam':
+            self.optimizer = torch.optim.Adam(self.parameters, lr=self.args.lr, amsgrad=True)
+            if self.args.use_scheduler:
+                self._build_scheduler(self.optimizer)
+            for j in range(self.args.epochs):
+                self.optimizer.zero_grad()
+                loss = self._optimization_loop()
+                self.optimizer.step()
+                if self.scheduler:
+                    self.scheduler.step(loss)
+
+        elif self.args.optimizer == 'sgd':
+            self.optimizer = torch.optim.SGD(self.parameters, lr=self.args.lr,
+                                             momentum=0, dampening=0, weight_decay=0, nesterov=False)
+            if self.args.use_scheduler:
+                self._build_scheduler(self.optimizer)
+            for j in range(self.args.epochs):
+                self.optimizer.zero_grad()
+                loss = self._optimization_loop()
+                self.optimizer.step()
+                if self.scheduler:
+                    self.scheduler.step(loss)
+        else:
+            assert False
+
         self.elapsed = time() - start
 
     def save_result(self, attempt, save_images=False):
@@ -335,6 +399,16 @@ class Training:
             with h5py.File(os.path.join(self.outpath, outname + '.hdf5'), 'w') as f:
                 dset = f.create_dataset("all_outputs", data=np.asarray(self.out_list))
 
+    def _save_model(self, loss):
+        outname = self.image_name.split('/')[-1] + '_run%s.pth' % str(self.attempt).zfill(u.ten_digit(self.args.attempts))
+        self.checkpoint_file = os.path.join(self.outpath, outname)
+        state = dict(net=self.net.state_dict(),
+                     opt=self.optimizer.state_dict(),
+                     sched=self.scheduler.state_dict() if self.scheduler else None,
+                     loss=loss,
+                     epoch=self.iiter)
+        torch.save(state, self.checkpoint_file)
+
     def compute_nccw(self):
         assert len(self.out_list) > 0, "Out list is empty"
         self.history['ncc_w'] = []
@@ -351,10 +425,12 @@ class Training:
         torch.cuda.empty_cache()
         self._build_input()
         self._build_model()
-        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_wgpu': [], 'ncc_d': [], 'vgg19': []}
+        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_d': [], 'vgg19': []}
         self.out_list = []
         self.mask = None
         self.edges = None
+        self.optimizer = None
+        self.scheduler = None
 
 
 def _parse_args():
@@ -448,6 +524,8 @@ def _parse_args():
                         help='LR threshold for Plateau scheduler.')
     parser.add_argument('--lr_patience', type=int, default=10, required=False,
                         help='LR patience for Plateau scheduler.')
+    parser.add_argument('--gradient_clip', type=float, required=False,
+                        help='Gradient clipping value.')
     args = parser.parse_args()
     if args.seeds is None:
         args.seeds = [0] * args.attempts
