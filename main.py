@@ -7,7 +7,6 @@ warnings.filterwarnings("ignore")
 
 import os
 import torch
-import numpy as np
 import h5py
 import matplotlib.image as mpimg
 from scipy.io import loadmat
@@ -38,6 +37,7 @@ def _set_seed(seed=0):
 
 class Training:
     def __init__(self, args, dtype, outpath, img_shape=(512, 512, 3)):
+        self.reload_number = 0
         self.args = args
         self.dtype = dtype
         self.outpath = outpath
@@ -52,6 +52,7 @@ class Training:
         # training parameters
         self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_d': [], 'vgg19': []}
         self.iiter = 0
+        self.reload_counter = 0
         self.saving_interval = 0
         self.psnr_max = 0
 
@@ -181,10 +182,6 @@ class Training:
         else:
             raise ValueError('Invalid strategy for random mask generation')
 
-    def load_mask(self, mask_path):
-        self.mask = u.crop_center(mpimg.imread(mask_path), self.img_shape[0], self.img_shape[1])
-        self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
-
     def load_image(self, image_path):
         self.imgpath = image_path
         self.image_name = self.imgpath.split('.')[-2].split('/')[-1]
@@ -254,12 +251,13 @@ class Training:
 
         # Save and display loss terms
         self.history['loss'].append(total_loss.item())
-        msg = "\tPicture %s\t%s \tIter %s, Loss=%.2e, MSE=%.2e" \
+        msg = "\tPicture %s%s, %d reload \tIter %s, Loss=%.2e, MSE=%.2e" \
               % (self.imgpath.split('/')[-1],
-                 'Attempt %s,' % str(self.attempt).zfill(
-                     u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
+                 ', attempt %s' % str(self.attempt).zfill(u.ten_digit(self.args.attempts)) if self.args.attempts != 1 else '',
+                 self.reload_number,
                  str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
-                 self.history['loss'][-1], mse.item())
+                 self.history['loss'][-1],
+                 mse.item())
 
         if self.args.nccd:  # compute also the final NCC with DnCNN
             self.history['ncc_d'].append(u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn).item())
@@ -289,15 +287,23 @@ class Training:
         print(colored(msg, 'yellow'), '\r', end='')
 
         # model checkpoint
-        if self.iiter > 0:
-            if self.history['loss'][-1] < self.history['loss'][-2]:
+        if self.iiter == 0:
+            self.best_loss = self.history['loss'][-1]
+        else:
+            if self.history['loss'][-1] < self.best_loss:
                 self._save_model(self.history['loss'][-1])
-            else:  # load last best model
-                checkpoint = torch.load(self.checkpoint_file)
-                self.net.load_state_dict(checkpoint['net'])
-                self.optimizer.load_state_dict(checkpoint['opt'])
-                if self.scheduler:
-                    self.scheduler.load_state_dict(checkpoint['sched'])
+                self.reload_counter = 0
+                self.best_loss = self.history['loss'][-1]
+            else:  # load last best model if the loss does not improve over its best value after a certain patience
+                self.reload_counter += 1
+                if self.reload_counter >= self.args.reload_patience:
+                    self.reload_number += 1
+                    checkpoint = torch.load(self.checkpoint_file)
+                    self.net.load_state_dict(checkpoint['net'])
+                    self.optimizer.load_state_dict(checkpoint['opt'])
+                    if self.scheduler:
+                        self.scheduler.load_state_dict(checkpoint['sched'])
+                    self.reload_counter = 0
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history['psnr'][-1]:
@@ -420,6 +426,7 @@ class Training:
 
     def reset(self):
         self.iiter = 0
+        self.reload_counter = 0
         self.saving_interval = 0
         print('')
         torch.cuda.empty_cache()
@@ -526,6 +533,8 @@ def _parse_args():
                         help='LR patience for Plateau scheduler.')
     parser.add_argument('--gradient_clip', type=float, required=False,
                         help='Gradient clipping value.')
+    parser.add_argument('--reload_patience', type=int, default=100, required=False,
+                        help='Number of epoch to be waited before reloading the saved model checkpoint.')
     args = parser.parse_args()
     if args.seeds is None:
         args.seeds = [0] * args.attempts
