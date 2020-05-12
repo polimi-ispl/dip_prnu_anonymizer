@@ -287,6 +287,7 @@ class Training:
         print(colored(msg, 'yellow'), '\r', end='')
 
         # model checkpoint
+        exit_flag = False
         if self.args.reload_patience != 0:
             if self.iiter == 0:
                 self.best_loss = self.history['loss'][-1]
@@ -295,7 +296,7 @@ class Training:
                     self._save_model(self.history['loss'][-1])
                     self.reload_counter = 0
                     self.best_loss = self.history['loss'][-1]
-                else:  # load last best model if the loss does not improve over its best value after a certain patience
+                else:  # exit from the optimization loop if the loss does not improve over its best value after a certain patience
                     self.reload_counter += 1
                     if self.reload_counter >= self.args.reload_patience:
                         self.reload_number += 1
@@ -307,6 +308,9 @@ class Training:
                         if self.scheduler:
                             self.scheduler.load_state_dict(checkpoint['sched'])
                         self.reload_counter = 0
+                        if self.args.exit_first_drop:
+                            # exit from the optimization loop:
+                            exit_flag = True
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history['psnr'][-1]:
@@ -329,7 +333,7 @@ class Training:
         self.iiter += 1
         self.saving_interval += 1
 
-        return total_loss
+        return total_loss, exit_flag
 
     def _build_scheduler(self, optimizer):
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
@@ -363,7 +367,9 @@ class Training:
                 self._build_scheduler(self.optimizer)
             for j in range(self.args.epochs):
                 self.optimizer.zero_grad()
-                loss = self._optimization_loop()
+                loss, exit_flag = self._optimization_loop()
+                if exit_flag:
+                    break
                 self.optimizer.step()
                 if self.scheduler:
                     self.scheduler.step(loss)
@@ -449,7 +455,12 @@ def _parse_args():
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
                         help='Device name')
     parser.add_argument('--dataset', type=str, required=False, default='dataset300',
-                        choices=['dataset300', 'dataset600', 'dataset13'],
+                        # choices=['/nas/home/fpicetti/dip_prnu_anonymizer/dataset300',
+                        #          '/nas/home/fpicetti/dip_prnu_anonymizer/dataset600',
+                        #          '/nas/home/fpicetti/dip_prnu_anonymizer/dataset13'],
+                        choices=['dataset300',
+                                 'dataset600',
+                                 'dataset13'],
                         help='Dataset to be used')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
@@ -541,6 +552,9 @@ def _parse_args():
                         help='Gradient clipping value.')
     parser.add_argument('--reload_patience', type=int, default=0, required=False,
                         help='Number of epoch to be waited before reloading the saved model checkpoint.')
+    parser.add_argument('--exit_first_drop', type=bool, default=False, required=False,
+                        help='Exit after the first big drop of PSNR')
+
     args = parser.parse_args()
     if args.seeds is None:
         args.seeds = [0] * args.attempts
