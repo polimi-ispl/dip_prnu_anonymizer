@@ -296,21 +296,22 @@ class Training:
                     self._save_model(self.history['loss'][-1])
                     self.reload_counter = 0
                     self.best_loss = self.history['loss'][-1]
-                else:  # exit from the optimization loop if the loss does not improve over its best value after a certain patience
+                else:  # exit from the optimization loop/load the best model if the loss does not improve over its best value after a certain patience
                     self.reload_counter += 1
                     if self.reload_counter >= self.args.reload_patience:
-                        self.reload_number += 1
-                        checkpoint = torch.load(self.checkpoint_file)
-                        self.net.load_state_dict(checkpoint['net'])
-                        self.optimizer.load_state_dict(checkpoint['opt'])
-                        for group in self.optimizer.param_groups:
-                            group['lr'] *= self.args.lr_factor
-                        if self.scheduler:
-                            self.scheduler.load_state_dict(checkpoint['sched'])
-                        self.reload_counter = 0
                         if self.args.exit_first_drop:
                             # exit from the optimization loop:
                             exit_flag = True
+                        else:
+                            self.reload_number += 1
+                            checkpoint = torch.load(self.checkpoint_file)
+                            self.net.load_state_dict(checkpoint['net'])
+                            self.optimizer.load_state_dict(checkpoint['opt'])
+                            for group in self.optimizer.param_groups:
+                                group['lr'] *= self.args.lr_factor
+                            if self.scheduler:
+                                self.scheduler.load_state_dict(checkpoint['sched'])
+                            self.reload_counter = 0
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history['psnr'][-1]:
