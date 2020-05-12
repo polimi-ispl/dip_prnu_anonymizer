@@ -302,7 +302,8 @@ class Training:
                         checkpoint = torch.load(self.checkpoint_file)
                         self.net.load_state_dict(checkpoint['net'])
                         self.optimizer.load_state_dict(checkpoint['opt'])
-                        #self.optimizer.defaults['lr'] *= self.args.lr_factor
+                        for group in self.optimizer.param_groups:
+                            group['lr'] *= self.args.lr_factor
                         if self.scheduler:
                             self.scheduler.load_state_dict(checkpoint['sched'])
                         self.reload_counter = 0
