@@ -198,14 +198,14 @@ class Training:
 
     def load_prnu(self, device_path):
         # clean PRNU to be added to the output
-        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.compressed else
+        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.jpg else
                                                                             '')))['prnu']
         if self.prnu_clean.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
 
         # filtered PRNU for computing the NCC
         self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat'
-                                              % ('_comp' if self.args.compressed else '')))['prnu']
+                                              % ('_comp' if self.args.jpg else '')))['prnu']
         if self.prnu_4ncc.shape != self.img_shape[:2]:
             raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
 
@@ -217,7 +217,7 @@ class Training:
         self.edges = binary_dilation(canny(u.rgb2gray(self.img), sigma=sigma))
 
     def _optimization_loop(self):
-        if self.args.param_noise:  # TODO it does not work
+        if self.args.param_noise:  # TODO fix param_noise
             for n in [x for x in self.net.parameters() if len(x.size()) == 4]:
                 _n = n.detach().clone().normal_(std=float(n.std())/50)
                 n = n + _n
@@ -287,23 +287,25 @@ class Training:
         print(colored(msg, 'yellow'), '\r', end='')
 
         # model checkpoint
-        if self.iiter == 0:
-            self.best_loss = self.history['loss'][-1]
-        else:
-            if self.history['loss'][-1] < self.best_loss:
-                self._save_model(self.history['loss'][-1])
-                self.reload_counter = 0
+        if self.args.reload_patience != 0:
+            if self.iiter == 0:
                 self.best_loss = self.history['loss'][-1]
-            else:  # load last best model if the loss does not improve over its best value after a certain patience
-                self.reload_counter += 1
-                if self.reload_counter >= self.args.reload_patience:
-                    self.reload_number += 1
-                    checkpoint = torch.load(self.checkpoint_file)
-                    self.net.load_state_dict(checkpoint['net'])
-                    self.optimizer.load_state_dict(checkpoint['opt'])
-                    if self.scheduler:
-                        self.scheduler.load_state_dict(checkpoint['sched'])
+            else:
+                if self.history['loss'][-1] < self.best_loss:
+                    self._save_model(self.history['loss'][-1])
                     self.reload_counter = 0
+                    self.best_loss = self.history['loss'][-1]
+                else:  # load last best model if the loss does not improve over its best value after a certain patience
+                    self.reload_counter += 1
+                    if self.reload_counter >= self.args.reload_patience:
+                        self.reload_number += 1
+                        checkpoint = torch.load(self.checkpoint_file)
+                        self.net.load_state_dict(checkpoint['net'])
+                        self.optimizer.load_state_dict(checkpoint['opt'])
+                        #self.optimizer.defaults['lr'] *= self.args.lr_factor
+                        if self.scheduler:
+                            self.scheduler.load_state_dict(checkpoint['sched'])
+                        self.reload_counter = 0
 
         # save if the PSNR is increasing (above a threshold) and only every tot iterations
         if self.psnr_max < self.history['psnr'][-1]:
@@ -444,9 +446,10 @@ def _parse_args():
     parser = ArgumentParser()
     # dataset parameter
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
-                        help='Device name in ./dataset/ folder')
-    parser.add_argument('--small', action='store_true',
-                        help='Use small dataset')
+                        help='Device name')
+    parser.add_argument('--dataset', type=str, required=False, default='dataset300',
+                        choices=['dataset300', 'dataset600', 'dataset13'],
+                        help='Dataset to be used')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
     parser.add_argument('--pics_idx', nargs='+', type=int, required=False,
@@ -456,7 +459,7 @@ def _parse_args():
                         help='5-long code of the picture to be loaded')
     parser.add_argument('--outpath', type=str, required=False, default='debug',
                         help='Run name in ./results/')
-    parser.add_argument('--compressed', '-comp', action='store_true',
+    parser.add_argument('--jpg', action='store_true',
                         help='Use the JPEG dataset')
     parser.add_argument('--slack', action='store_true',
                         help='Send a message to slack')
@@ -464,18 +467,20 @@ def _parse_args():
                         help='Save every network output to disk in a hdf5 file.')
     parser.add_argument('--nccw_runtime', type=bool, default=False, required=False,
                         help='Compute NCC at runtime (it slows down the training phase as it is done on CPU)')
+    parser.add_argument('--nccw_skip', type=bool, default=True, required=False,
+                        help='Skip the computation of NCC (and thus save the output image list)')
     parser.add_argument('--seeds', nargs='+', type=int, required=False,
                         help='Random Seed list for each attempt (default 0 for every attempt).')
     # network design
-    parser.add_argument('--network', type=str, required=False, default='skip', choices=['unet', 'skip', 'multires'],
+    parser.add_argument('--network', type=str, required=False, default='multires', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
-    parser.add_argument('--activation', type=str, default='ReLU', required=False,
+    parser.add_argument('--activation', type=str, default='LeakyReLU', required=False,
                         help='Activation function to be used in the convolution block [ReLU, Tanh, LeakyReLU]')
     parser.add_argument('--need_sigmoid', type=bool, required=False, default=True,
                         help='Apply a sigmoid activation to the network output')
-    parser.add_argument('--filters', nargs='+', type=int, required=False, default=[128, 128, 128, 128],
+    parser.add_argument('--filters', nargs='+', type=int, required=False, default=[16, 32, 64, 128, 256],
                         help='Numbers of channels')
-    parser.add_argument('--skip', nargs='+', type=int, required=False, default=[0, 0, 4, 4],
+    parser.add_argument('--skip', nargs='+', type=int, required=False, default=[16, 32, 64, 128],
                         help='Number of channels for skip')
     parser.add_argument('--input_depth', type=int, required=False, default=512,
                         help='Depth of the input noise tensor')
@@ -509,9 +514,9 @@ def _parse_args():
                         help='Minimum PSNR for saving the image.')
     parser.add_argument('--param_noise', action='store_true',
                         help='Add normal noise to the parameters every epoch')
-    parser.add_argument('--reg_noise_std', type=float, required=False, default=0.03,
+    parser.add_argument('--reg_noise_std', type=float, required=False, default=0.1,
                         help='Standard deviation of the normal noise to be added to the input every epoch')
-    parser.add_argument('--noise_dist', type=str, default='uniform', required=False, choices=['normal', 'uniform'],
+    parser.add_argument('--noise_dist', type=str, default='normal', required=False, choices=['normal', 'uniform'],
                         help='Type of noise for the input tensor')
     parser.add_argument('--noise_std', type=float, default=.1, required=False,
                         help='Standard deviation of the noise for the input tensor')
@@ -525,7 +530,7 @@ def _parse_args():
                         help='Number of attempts to be performed on the same picture.')
     parser.add_argument('--use_scheduler', action='store_true',
                         help='Use ReduceLROnPlateau scheduler.')
-    parser.add_argument('--lr_factor', type=float, default=.1, required=False,
+    parser.add_argument('--lr_factor', type=float, default=.9, required=False,
                         help='LR reduction for Plateau scheduler.')
     parser.add_argument('--lr_thresh', type=float, default=1e-4, required=False,
                         help='LR threshold for Plateau scheduler.')
@@ -533,7 +538,7 @@ def _parse_args():
                         help='LR patience for Plateau scheduler.')
     parser.add_argument('--gradient_clip', type=float, required=False,
                         help='Gradient clipping value.')
-    parser.add_argument('--reload_patience', type=int, default=100, required=False,
+    parser.add_argument('--reload_patience', type=int, default=0, required=False,
                         help='Number of epoch to be waited before reloading the saved model checkpoint.')
     args = parser.parse_args()
     if args.seeds is None:
@@ -541,7 +546,8 @@ def _parse_args():
     elif len(args.seeds) == 1:
         args.seeds = [args.seeds[0]] * args.attempts
     assert len(args.seeds) == args.attempts, 'Provided seed list has to have a length of the attempts'
-
+    if args.nccw_skip:
+        args.save_outputs = True
     return args
 
 
@@ -552,7 +558,7 @@ def main():
     u.set_gpu(args.gpu)
 
     # create output folder
-    outpath = os.path.join('./results/', 'comp' if args.compressed else '', args.outpath)
+    outpath = os.path.join('./results/', 'comp' if args.jpg else '', args.outpath)
     if not os.path.exists(outpath):
         os.makedirs(outpath)
     print(colored('Saving to %s' % outpath, 'yellow'))
@@ -561,17 +567,12 @@ def main():
 
     T = Training(args, dtype, outpath)
 
-    if args.small:
-        dataset = 'dataset_small'
-    else:
-        dataset = 'dataset'
-
     if args.device == 'all':
-        device_list = glob(os.path.join(dataset, '*'))
+        device_list = glob(os.path.join(args.dataset, '*'))
     elif isinstance(args.device, list):
-        device_list = [os.path.join(dataset, d) for d in args.device]
+        device_list = [os.path.join(args.dataset, d) for d in args.device]
     elif isinstance(args.device, str):
-        device_list = [os.path.join(dataset, args.device)]
+        device_list = [os.path.join(args.dataset, args.device)]
     device_list = sorted(device_list)
 
     pics_idx = args.pics_idx if args.pics_idx is not None else [0, None]  # all the pictures
@@ -582,10 +583,10 @@ def main():
 
         if args.pics_IDs is not None:  # load specified image
             pic_list = [os.path.join(device, device.split('/')[-1] + '_%s.%s'
-                                     % (_, 'JPG' if args.compressed else 'png'))
+                                     % (_, 'JPG' if args.jpg else 'png'))
                         for _ in args.pics_IDs]
         else:
-            if args.compressed:
+            if args.jpg:
                 pic_list = glob(os.path.join(device, '*.JPG'))[pics_idx[0]:pics_idx[-1]]
             else:
                 pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
@@ -599,7 +600,7 @@ def main():
                 T.build_mask(strategy=args.mask_strategy, sigma=args.edges_sigma)
                 T.attempt = attempt
                 T.optimize()
-                if not args.nccw_runtime:  # compute NCC on CPU at the end of the optimization
+                if not args.nccw_runtime and not args.nccw_skip:  # compute NCC on CPU at the end of the optimization
                     T.compute_nccw()
                 T.save_result(attempt, args.save_outputs)
                 T.reset()
