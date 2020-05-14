@@ -1,7 +1,7 @@
 from __future__ import print_function
 import warnings
 
-from torch.nn.utils import clip_grad_value_
+# from torch.nn.utils import clip_grad_value_
 
 warnings.filterwarnings("ignore")
 
@@ -247,7 +247,8 @@ class Training:
 
         # gradient clipping
         if self.args.gradient_clip is not None:
-            clip_grad_value_(self.net.parameters(), self.args.gradient_clip)
+            print('No clipping is defined')
+            # clip_grad_value_(self.net.parameters(), self.args.gradient_clip)
 
         # Save and display loss terms
         self.history['loss'].append(total_loss.item())
@@ -456,12 +457,7 @@ def _parse_args():
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
                         help='Device name')
     parser.add_argument('--dataset', type=str, required=False, default='dataset300',
-                        # choices=['/nas/home/fpicetti/dip_prnu_anonymizer/dataset300',
-                        #          '/nas/home/fpicetti/dip_prnu_anonymizer/dataset600',
-                        #          '/nas/home/fpicetti/dip_prnu_anonymizer/dataset13'],
-                        choices=['dataset300',
-                                 'dataset600',
-                                 'dataset13'],
+                        choices=['dataset300', 'dataset600', 'dataset13'],
                         help='Dataset to be used')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
@@ -484,6 +480,8 @@ def _parse_args():
                         help='Skip the computation of NCC (and thus save the output image list)')
     parser.add_argument('--seeds', nargs='+', type=int, required=False,
                         help='Random Seed list for each attempt (default 0 for every attempt).')
+    parser.add_argument('--exit_first_drop', type=bool, default=False, required=False,
+                        help='Exit after the first big drop of PSNR')
     # network design
     parser.add_argument('--network', type=str, required=False, default='multires', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -517,7 +515,7 @@ def _parse_args():
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False, default=0.01,
                         help='Coefficient for adding the PRNU')
-    parser.add_argument('--epochs', '-e', type=int, required=False, default=3001,
+    parser.add_argument('--epochs', '-e', type=int, required=False, default=10001,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
                         help='Learning Rate for Adam optimizer')
@@ -551,10 +549,8 @@ def _parse_args():
                         help='LR patience for Plateau scheduler.')
     parser.add_argument('--gradient_clip', type=float, required=False,
                         help='Gradient clipping value.')
-    parser.add_argument('--reload_patience', type=int, default=0, required=False,
+    parser.add_argument('--reload_patience', type=int, default=500, required=False,
                         help='Number of epoch to be waited before reloading the saved model checkpoint.')
-    parser.add_argument('--exit_first_drop', type=bool, default=False, required=False,
-                        help='Exit after the first big drop of PSNR')
 
     args = parser.parse_args()
     if args.seeds is None:
@@ -574,7 +570,7 @@ def main():
     u.set_gpu(args.gpu)
 
     # create output folder
-    outpath = os.path.join('./results/', 'comp' if args.jpg else '', args.outpath)
+    outpath = os.path.join('./results/', args.outpath)
     if not os.path.exists(outpath):
         os.makedirs(outpath)
     print(colored('Saving to %s' % outpath, 'yellow'))
