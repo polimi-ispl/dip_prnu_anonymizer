@@ -11,14 +11,14 @@ from multiprocessing import Pool, cpu_count
 import numpy as np
 import pywt
 from numpy.fft import fft2, ifft2
-from scipy.ndimage import filters
+from scipy.ndimage import uniform_filter
 from sklearn.metrics import roc_curve, auc
 from tqdm import tqdm
+import gc
 
 
 class ArgumentError(Exception):
     pass
-
 
 """
 Extraction functions
@@ -122,6 +122,52 @@ def noise_extract_compact(args):
     w = noise_extract(*args)
     im = args[0]
     return (w * im / 255.).astype(np.float32)
+
+
+def noise_extract_pool(args):
+    """
+    Extract residual. Useful for multiprocessing operations
+    :param args: (im, levels, sigma), see noise_extract for usage
+    :return: residual
+    """
+    w = noise_extract(*args)
+    w = rgb2gray(w)
+    w = zero_mean_total(w)
+    w_std = w.std(ddof=1)
+    w = wiener_dft(w, w_std).astype(np.float32)
+    return w
+
+
+def noise_extract_multiple(imgs: list, pool, levels: int = 4, sigma: float = 3,
+                             batch_size=cpu_count(), tqdm_str: str = '') -> list:
+    """
+    Extract noise residuals from a list of images. Images are supposed to be the same size
+    :param tqdm_str: tqdm description (see tqdm documentation)
+    :param batch_size: number of parallel processed images
+    :param processes: number of parallel processes
+    :param imgs: list of images of size (H,W,Ch) and type np.uint8
+    :param levels: number of wavelet decomposition levels
+    :param sigma: estimated noise power
+    :return: list of noise residuals
+    """
+    assert (isinstance(imgs[0], np.ndarray))
+    assert (imgs[0].ndim == 3)
+    assert (imgs[0].dtype == np.uint8)
+
+    args_list = []
+    for im in imgs:
+        args_list += [(im, levels, sigma)]
+
+    noise_list = []
+    for batch_idx0 in tqdm(np.arange(start=0, step=batch_size, stop=len(imgs)), disable=tqdm_str == '',
+                           desc=(tqdm_str + ' (2/2)'), dynamic_ncols=True):
+        wi_list = pool.map(noise_extract_pool, args_list[batch_idx0:batch_idx0 + batch_size])
+        noise_list += wi_list
+        del wi_list
+
+    gc.collect()
+
+    return noise_list
 
 
 def extract_multiple_aligned(imgs: list, levels: int = 4, sigma: float = 5, processes: int = None,
@@ -329,9 +375,7 @@ def wiener_adaptive(x: np.ndarray, noise_var: float, **kwargs) -> np.ndarray:
 
     avg_win_energy = np.zeros(x.shape + (len(window_size_list),))
     for window_idx, window_size in enumerate(window_size_list):
-        avg_win_energy[:, :, window_idx] = filters.uniform_filter(energy,
-                                                                  window_size,
-                                                                  mode='constant')
+        avg_win_energy[:, :, window_idx] = uniform_filter(energy, window_size, mode='constant')
 
     coef_var = threshold(avg_win_energy, noise_var)
     coef_var_min = np.min(coef_var, axis=2)
