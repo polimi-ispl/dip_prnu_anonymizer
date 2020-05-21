@@ -571,8 +571,7 @@ def main():
 
     # create output folder
     outpath = os.path.join('./results/', args.outpath)
-    if not os.path.exists(outpath):
-        os.makedirs(outpath)
+    os.makedirs(outpath, exist_ok=True)
     print(colored('Saving to %s' % outpath, 'yellow'))
     with open(os.path.join(outpath, 'args.txt'), 'w') as fp:
         json.dump(args.__dict__, fp, indent=4)

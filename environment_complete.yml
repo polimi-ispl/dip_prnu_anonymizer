@@ -146,5 +146,6 @@ dependencies:
   - zstd=1.4.4=h3b9ef0a_1
   - pip:
     - gputil==1.4.0
+    - h5py==2.10.0
 prefix: /nas/home/fpicetti/miniconda3/envs/dip
 
