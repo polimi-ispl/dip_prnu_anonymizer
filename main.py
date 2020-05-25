@@ -291,13 +291,13 @@ class Training:
         exit_flag = False
         if self.args.reload_patience != 0:
             if self.iiter == 0:
-                self.best_loss = self.history['loss'][-1]
+                self.best_psnr = self.history['psnr'][-1]
             else:
-                if self.history['loss'][-1] < self.best_loss:
-                    self._save_model(self.history['loss'][-1])
+                if self.history['psnr'][-1] > self.best_psnr:
+                    self._save_model(self.history['psnr'][-1])
                     self.reload_counter = 0
-                    self.best_loss = self.history['loss'][-1]
-                else:  # exit from the optimization loop/load the best model if the loss does not improve over its best value after a certain patience
+                    self.best_psnr = self.history['psnr'][-1]
+                else:  # exit from the optimization loop/load the best model if the PSNR does not improve over its best value after a certain patience
                     self.reload_counter += 1
                     if self.reload_counter >= self.args.reload_patience:
                         if self.args.exit_first_drop:
