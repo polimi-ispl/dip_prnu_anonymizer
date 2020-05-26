@@ -276,11 +276,11 @@ class Training:
         msg += ', SSIM=%.4f' % self.history['ssim'][-1]
 
         # CPU operations
-        out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
+        out_img = u.float2png(np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1))
 
         if self.args.nccw_runtime:
             self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
-                                         u.prnu.extract_single(u.float2png(out_img), sigma=3)))
+                                               u.prnu.extract_single(out_img, sigma=3)))
             msg += ', NCC_w=%+.4f' % self.history['ncc_w'][-1]
         else:
             self.out_list.append(out_img)
