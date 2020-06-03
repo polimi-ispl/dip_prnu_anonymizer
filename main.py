@@ -247,7 +247,7 @@ class Training:
 
         # gradient clipping
         if self.args.gradient_clip is not None:
-            print('No clipping is defined')
+            raise ValueError('No gradient clipping function is defined')
             # clip_grad_value_(self.net.parameters(), self.args.gradient_clip)
 
         # Save and display loss terms
@@ -289,42 +289,46 @@ class Training:
 
         # model checkpoint
         exit_flag = False
-        if self.args.reload_patience != 0:
-            if self.iiter == 0:
-                self.best_psnr = self.history['psnr'][-1]
-            else:
-                if self.history['psnr'][-1] > self.best_psnr:
-                    self._save_model(self.history['psnr'][-1])
-                    self.reload_counter = 0
+        if self.args.psnr_max is not None:
+            if self.history['psnr'][-1] > self.args.psnr_max:  # stop the optimization if the PSNR is above a threshold
+                exit_flag = True
+        else:  # stopping / reloading on drop
+            if self.args.reload_patience != 0:
+                if self.iiter == 0:
                     self.best_psnr = self.history['psnr'][-1]
-                else:  # exit from the optimization loop/load the best model if the PSNR does not improve over its best value after a certain patience
-                    self.reload_counter += 1
-                    if self.reload_counter >= self.args.reload_patience:
-                        if self.args.exit_first_drop:
-                            # exit from the optimization loop:
-                            exit_flag = True
-                        else:
-                            self.reload_number += 1
-                            checkpoint = torch.load(self.checkpoint_file)
-                            self.net.load_state_dict(checkpoint['net'])
-                            self.optimizer.load_state_dict(checkpoint['opt'])
-                            for group in self.optimizer.param_groups:
-                                group['lr'] *= self.args.lr_factor
-                            if self.scheduler:
-                                self.scheduler.load_state_dict(checkpoint['sched'])
-                            self.reload_counter = 0
+                else:
+                    if self.history['psnr'][-1] > self.best_psnr:
+                        self._save_model(self.history['psnr'][-1])
+                        self.reload_counter = 0
+                        self.best_psnr = self.history['psnr'][-1]
+                    else:  # exit from the optimization loop/load the best model if the PSNR does not improve over its best value after a certain patience
+                        self.reload_counter += 1
+                        if self.reload_counter >= self.args.reload_patience:
+                            if self.args.exit_first_drop:
+                                # exit from the optimization loop:
+                                exit_flag = True
+                            else:
+                                self.reload_number += 1
+                                checkpoint = torch.load(self.checkpoint_file)
+                                self.net.load_state_dict(checkpoint['net'])
+                                self.optimizer.load_state_dict(checkpoint['opt'])
+                                for group in self.optimizer.param_groups:
+                                    group['lr'] *= self.args.lr_factor
+                                if self.scheduler:
+                                    self.scheduler.load_state_dict(checkpoint['sched'])
+                                self.reload_counter = 0
 
-        # save if the PSNR is increasing (above a threshold) and only every tot iterations
-        if self.psnr_max < self.history['psnr'][-1]:
-            self.psnr_max = self.history['psnr'][-1]
-            if self.args.save_png_every and \
-                    self.psnr_max > self.args.psnr_min and \
-                    self.iiter > 0 \
-                    and self.saving_interval >= self.args.save_png_every:
-                self.out_img = out_img
-                outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
-                Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
-                self.saving_interval = 0
+        # # save if the PSNR is increasing (above a threshold) and only every tot iterations
+        # if self.psnr_max < self.history['psnr'][-1]:
+        #     self.psnr_max = self.history['psnr'][-1]
+        #     if self.args.save_png_every and \
+        #             self.psnr_max > self.args.psnr_min and \
+        #             self.iiter > 0 \
+        #             and self.saving_interval >= self.args.save_png_every:
+        #         self.out_img = out_img
+        #         outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
+        #         Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
+        #         self.saving_interval = 0
 
         # save last image if none of the above conditions are respected
         if self.out_img is None and self.iiter == self.args.epochs:
@@ -522,7 +526,9 @@ def _parse_args():
     parser.add_argument('--save_png_every', type=int, default=0, required=False,
                         help='Number of epochs every which to save the results')
     parser.add_argument('--psnr_min', type=float, default=30., required=False,
-                        help='Minimum PSNR for saving the image.')
+                        help='Minimum PSNR for saving the image (DEPRECATED).')
+    parser.add_argument('--psnr_max', type=float, required=False,
+                        help='Maximum PSNR for quitting the optimization.')
     parser.add_argument('--param_noise', action='store_true',
                         help='Add normal noise to the parameters every epoch')
     parser.add_argument('--reg_noise_std', type=float, required=False, default=0.1,
@@ -548,7 +554,7 @@ def _parse_args():
     parser.add_argument('--lr_patience', type=int, default=10, required=False,
                         help='LR patience for Plateau scheduler.')
     parser.add_argument('--gradient_clip', type=float, required=False,
-                        help='Gradient clipping value.')
+                        help='Gradient clipping value (NOT IMPLEMENTED).')
     parser.add_argument('--reload_patience', type=int, default=500, required=False,
                         help='Number of epoch to be waited before reloading the saved model checkpoint.')
 
