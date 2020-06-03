@@ -603,11 +603,8 @@ def main():
                                      % (_, 'JPG' if args.jpg else 'png'))
                         for _ in args.pics_IDs]
         else:
-            if args.jpg:
-                pic_list = glob(os.path.join(device, '*.JPG'))[pics_idx[0]:pics_idx[-1]]
-            else:
-                pic_list = glob(os.path.join(device, '*.png'))[pics_idx[0]:pics_idx[-1]]
-            pic_list = sorted(pic_list)
+            pic_list = sorted(glob(os.path.join(device, '*.JPG' if args.jpg else '*.png')))
+            pic_list = pic_list[pics_idx[0]:pics_idx[-1]]
 
         for picpath in pic_list:
             for attempt in range(args.attempts):
