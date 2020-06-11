@@ -461,7 +461,6 @@ def _parse_args():
     parser.add_argument('--device', nargs='+', type=str, required=False, default='all',
                         help='Device name')
     parser.add_argument('--dataset', type=str, required=False, default='dataset300',
-                        choices=['dataset300', 'dataset600', 'dataset13'],
                         help='Dataset to be used')
     parser.add_argument('--gpu', type=int, required=False, default=-1,
                         help='GPU to use (lowest memory usage based)')
