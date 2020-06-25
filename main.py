@@ -202,16 +202,15 @@ class Training:
                                                                             '')))['prnu']
         if self.prnu_clean.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
+        self.prnu_clean_tensor = u.numpy2torch(self.prnu_clean[np.newaxis, np.newaxis])
 
         # filtered PRNU for computing the NCC
-        self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat'
-                                              % ('_comp' if self.args.jpg else '')))['prnu']
-        if self.prnu_4ncc.shape != self.img_shape[:2]:
-            raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
-
-        # create relative tensors
-        self.prnu_clean_tensor = u.numpy2torch(self.prnu_clean[np.newaxis, np.newaxis])
-        self.prnu_4ncc_tensor = u.numpy2torch(self.prnu_4ncc[np.newaxis, np.newaxis])
+        if not self.args.nccw_skip:
+            self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat'
+                                                  % ('_comp' if self.args.jpg else '')))['prnu']
+            if self.prnu_4ncc.shape != self.img_shape[:2]:
+                raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
+            self.prnu_4ncc_tensor = u.numpy2torch(self.prnu_4ncc[np.newaxis, np.newaxis])
 
     def _extract_edges(self, sigma=3):
         self.edges = binary_dilation(canny(u.rgb2gray(self.img), sigma=sigma))
