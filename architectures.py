@@ -619,16 +619,16 @@ PercLoss = PerceptualLoss
 
 
 # MultiResUNet
-def conv2dbn(in_f, out_f, kernel_size, stride=1, bias=True, pad='zero', downsample_mode='stride', act_fun='LeakyReLU'):
+def _conv2dbn(in_f, out_f, kernel_size, stride=1, bias=True, pad='zero', downsample_mode='stride', act_fun='LeakyReLU'):
     block = conv(in_f, out_f, kernel_size, stride=stride, bias=bias, pad=pad, downsample_mode=downsample_mode)
     block.add(bn(out_f))
     block.add(act(act_fun))
     return block
 
 
-class Add(nn.Module):
+class _Add(nn.Module):
     def __init__(self, *args):
-        super(Add, self).__init__()
+        super(_Add, self).__init__()
 
         for idx, module in enumerate(args):
             self.add_module(str(idx), module)
@@ -641,40 +641,40 @@ class Add(nn.Module):
         return torch.stack(inputs, dim=0).sum(dim=0)
 
 
-def MultiResBlockFunc(U, f_in, alpha=1.67, pad='zero', act_fun='LeakyReLU', bias=True):
+def _MultiResBlockFunc(U, f_in, alpha=1.67, pad='zero', act_fun='LeakyReLU', bias=True):
     W = alpha * U
     out_dim = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
     model = nn.Sequential()
     deep = nn.Sequential()
-    conv3x3 = conv2dbn(f_in, int(W * 0.167), 3, 1,
-                       bias=bias, pad=pad, act_fun=act_fun)
-    conv5x5 = conv3x3.add(conv2dbn(int(W * 0.167), int(W * 0.333), 3, 1, bias=bias,
-                          pad=pad, act_fun=act_fun))
-    conv7x7 = conv5x5.add(conv2dbn(int(W * 0.333), int(W * 0.5), 3, 1, bias=bias,
-                          pad=pad, act_fun=act_fun))
-    shortcut = conv2dbn(f_in, out_dim, 1, 1,
+    conv3x3 = _conv2dbn(f_in, int(W * 0.167), 3, 1,
                         bias=bias, pad=pad, act_fun=act_fun)
+    conv5x5 = conv3x3.add(_conv2dbn(int(W * 0.167), int(W * 0.333), 3, 1, bias=bias,
+                                    pad=pad, act_fun=act_fun))
+    conv7x7 = conv5x5.add(_conv2dbn(int(W * 0.333), int(W * 0.5), 3, 1, bias=bias,
+                                    pad=pad, act_fun=act_fun))
+    shortcut = _conv2dbn(f_in, out_dim, 1, 1,
+                         bias=bias, pad=pad, act_fun=act_fun)
     deep.add(Concat(1, conv3x3, conv5x5, conv7x7))
     deep.add(bn(out_dim))
-    model.add(Add(deep, shortcut))
+    model.add(_Add(deep, shortcut))
     model.add(act(act_fun))
     model.add(bn(out_dim))
     return model
 
 
-class MultiResBlock(nn.Module):
+class _MultiResBlock(nn.Module):
     def __init__(self, U, f_in, alpha=1.67, pad='zero', act_fun='LeakyReLU', bias=True):
-        super(MultiResBlock, self).__init__()
+        super(_MultiResBlock, self).__init__()
         W = alpha * U
         self.out_dim = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
-        self.shortcut = conv2dbn(f_in, int(W * 0.167) + int(W * 0.333) + int(W * 0.5), 1, 1,
-                                 bias=bias, pad=pad, act_fun=act_fun)
-        self.conv3x3 = conv2dbn(f_in, int(W * 0.167), 3, 1, bias=bias,
-                                pad=pad, act_fun=act_fun)
-        self.conv5x5 = conv2dbn(int(W * 0.167), int(W * 0.333), 3, 1, bias=bias,
-                                pad=pad, act_fun=act_fun)
-        self.conv7x7 = conv2dbn(int(W * 0.333), int(W * 0.5), 3, 1, bias=bias,
-                                pad=pad, act_fun=act_fun)
+        self.shortcut = _conv2dbn(f_in, int(W * 0.167) + int(W * 0.333) + int(W * 0.5), 1, 1,
+                                  bias=bias, pad=pad, act_fun=act_fun)
+        self.conv3x3 = _conv2dbn(f_in, int(W * 0.167), 3, 1, bias=bias,
+                                 pad=pad, act_fun=act_fun)
+        self.conv5x5 = _conv2dbn(int(W * 0.167), int(W * 0.333), 3, 1, bias=bias,
+                                 pad=pad, act_fun=act_fun)
+        self.conv7x7 = _conv2dbn(int(W * 0.333), int(W * 0.5), 3, 1, bias=bias,
+                                 pad=pad, act_fun=act_fun)
         self.bn1 = bn(self.out_dim)
         self.bn2 = bn(self.out_dim)
         self.accfun = act(act_fun)
@@ -689,16 +689,16 @@ class MultiResBlock(nn.Module):
         return out
 
 
-class PathRes(nn.Module):
+class _PathRes(nn.Module):
     def __init__(self, f_in, f_out, length, pad='zero', act_fun='LeakyReLU', bias=True):
-        super(PathRes, self).__init__()
+        super(_PathRes, self).__init__()
         self.network = []
-        self.network.append(conv2dbn(f_in, f_out, 3, 1, bias=bias, pad=pad, act_fun=act_fun))
-        self.network.append(conv2dbn(f_in, f_out, 1, 1, bias=bias, pad=pad, act_fun=act_fun))
+        self.network.append(_conv2dbn(f_in, f_out, 3, 1, bias=bias, pad=pad, act_fun=act_fun))
+        self.network.append(_conv2dbn(f_in, f_out, 1, 1, bias=bias, pad=pad, act_fun=act_fun))
         self.network.append(bn(f_out))
         for i in range(length - 1):
-            self.network.append(conv2dbn(f_out, f_out, 3, 1, bias=bias, pad=pad, act_fun=act_fun))
-            self.network.append(conv2dbn(f_out, f_out, 1, 1, bias=bias, pad=pad, act_fun=act_fun))
+            self.network.append(_conv2dbn(f_out, f_out, 3, 1, bias=bias, pad=pad, act_fun=act_fun))
+            self.network.append(_conv2dbn(f_out, f_out, 1, 1, bias=bias, pad=pad, act_fun=act_fun))
             self.network.append(bn(f_out))
         self.accfun = act(act_fun)
         self.length = length
@@ -706,30 +706,21 @@ class PathRes(nn.Module):
 
     def forward(self, input):
         out = self.network[2](self.accfun(torch.add(self.network[0](input),
-                              self.network[1](input))))
+                                                    self.network[1](input))))
         for i in range(1, self.length):
             out = self.network[i * 3 + 2](self.accfun(torch.add(self.network[i * 3](out),
-                                          self.network[i * 3 + 1](out))))
+                                                                self.network[i * 3 + 1](out))))
 
         return out
 
 
-def MulResUnet(
-        num_input_channels=2, num_output_channels=3,
-        num_channels_down=[16, 32, 64, 128, 256], num_channels_up=[16, 32, 64, 128, 256], num_channels_skip=[16, 32, 64, 128],
-        filter_size_down=3, filter_size_up=3, filter_skip_size=1, alpha=1.67,
-        need_sigmoid=True, need_bias=True,
-        pad='zero', upsample_mode='nearest', downsample_mode='stride', act_fun='LeakyReLU',
-        need1x1_up=True):
-    """Assembles encoder-decoder with skip connections.
+def MulResUnet(num_input_channels=2, num_output_channels=3,
+               num_channels_down=(16, 32, 64, 128, 256),
+               num_channels_up=(16, 32, 64, 128, 256),
+               num_channels_skip=(16, 32, 64, 128),
+               filter_size_down=3, filter_size_up=3, filter_skip_size=1, alpha=1.67, need_sigmoid=True, need_bias=True,
+               pad='zero', upsample_mode='nearest', downsample_mode='stride', act_fun='LeakyReLU', need1x1_up=True):
 
-    Arguments:
-        act_fun: Either string 'LeakyReLU|Swish|ELU|none' or module (e.g. nn.ReLU)
-        pad (string): zero|reflection (default: 'zero')
-        upsample_mode (string): 'nearest|bilinear' (default: 'nearest')
-        downsample_mode (string): 'stride|avg|max|lanczos2' (default: 'stride')
-
-    """
     assert len(num_channels_down) == len(
         num_channels_up) == (len(num_channels_skip) + 1)
 
@@ -751,8 +742,8 @@ def MulResUnet(
 
     model = nn.Sequential()
     model_tmp = model
-    multires = MultiResBlock(num_channels_down[0], num_input_channels,
-                             alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias)
+    multires = _MultiResBlock(num_channels_down[0], num_input_channels,
+                              alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias)
 
     model_tmp.add(multires)
     input_depth = multires.out_dim
@@ -762,8 +753,8 @@ def MulResUnet(
         deeper = nn.Sequential()
         skip = nn.Sequential()
 
-        multires = MultiResBlock(num_channels_down[i], input_depth,
-                                 alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias)
+        multires = _MultiResBlock(num_channels_down[i], input_depth,
+                                  alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias)
 
         deeper.add(conv(input_depth, input_depth, 3, stride=2, bias=need_bias, pad=pad,
                         downsample_mode=downsample_mode[i]))
@@ -772,7 +763,7 @@ def MulResUnet(
         deeper.add(multires)
 
         if num_channels_skip[i - 1] != 0:
-            skip.add(PathRes(input_depth, num_channels_skip[i - 1], 1, pad=pad, act_fun=act_fun, bias=need_bias))
+            skip.add(_PathRes(input_depth, num_channels_skip[i - 1], 1, pad=pad, act_fun=act_fun, bias=need_bias))
             model_tmp.add(Concat(1, skip, deeper))
         else:
             model_tmp.add(deeper)
@@ -785,8 +776,8 @@ def MulResUnet(
 
         deeper.add(nn.Upsample(scale_factor=2, mode=upsample_mode[i]))
 
-        model_tmp.add(MultiResBlock(num_channels_up[i - 1], multires.out_dim + num_channels_skip[i - 1],
-                      alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias))
+        model_tmp.add(_MultiResBlock(num_channels_up[i - 1], multires.out_dim + num_channels_skip[i - 1],
+                                     alpha=alpha, pad=pad, act_fun=act_fun, bias=need_bias))
 
         input_depth = multires.out_dim
         model_tmp = deeper_main
@@ -799,3 +790,18 @@ def MulResUnet(
         model.add(nn.Sigmoid())
 
     return model
+
+
+class MultiResInjection(nn.Module):
+    def __init__(self, multires, prnu_tensor):
+        super(MultiResInjection, self).__init__()
+
+        self.multires = multires
+        self.prnu_tensor = prnu_tensor
+        self.prnu_injection = nn.Conv2d(1, 1, kernel_size=1, bias=False).type(torch.cuda.FloatTensor)
+
+    def forward(self, x):
+        x = self.multires(x)
+        weighted_prnu = self.prnu_injection(self.prnu_tensor)
+        x = x * (1 + weighted_prnu)
+        return x
