@@ -782,10 +782,10 @@ def MulResUnet(num_input_channels=2, num_output_channels=3,
         input_depth = multires.out_dim
         model_tmp = deeper_main
     W = num_channels_up[0] * alpha
-    last_kernal = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
+    last_kernel = int(W * 0.167) + int(W * 0.333) + int(W * 0.5)
 
     model.add(
-        conv(last_kernal, num_output_channels, 1, bias=need_bias, pad=pad))
+        conv(last_kernel, num_output_channels, 1, bias=need_bias, pad=pad))
     if need_sigmoid:
         model.add(nn.Sigmoid())
 
@@ -793,15 +793,20 @@ def MulResUnet(num_input_channels=2, num_output_channels=3,
 
 
 class MultiResInjection(nn.Module):
-    def __init__(self, multires, prnu_tensor):
+    def __init__(self, multires, prnu_tensor, gamma_init=None, use_relu=False):
         super(MultiResInjection, self).__init__()
 
+        self.use_relu = use_relu
         self.multires = multires
         self.prnu_tensor = prnu_tensor
         self.prnu_injection = nn.Conv2d(1, 1, kernel_size=1, bias=False).type(torch.cuda.FloatTensor)
+        if gamma_init is not None:
+            self.prnu_injection.weight = nn.Parameter(torch.ones_like(self.prnu_injection.weight) * gamma_init)
 
     def forward(self, x):
         x = self.multires(x)
         weighted_prnu = self.prnu_injection(self.prnu_tensor)
+        if self.use_relu:
+            weighted_prnu = nn.ReLU()(weighted_prnu)
         x = x * (1 + weighted_prnu)
         return x
