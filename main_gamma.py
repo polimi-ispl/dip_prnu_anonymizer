@@ -41,6 +41,7 @@ class Training:
         self.outpath = outpath
         self.img_shape = img_shape
         self.out_list = []
+        self.gamma_list = []
         self.attempt = 0
 
         # losses
@@ -59,8 +60,8 @@ class Training:
         self.image_name = None
         self.img = None
         self.img_tensor = None
-        self.prnu_clean = None
-        self.prnu_clean_tensor = None
+        self.prnu_injection = None
+        self.prnu_injection_tensor = None
         self.prnu_4ncc = None
         self.prnu_4ncc_tensor = None
         self.out_img = None
@@ -100,19 +101,34 @@ class Training:
         self.input_tensor_old = self.input_tensor.detach().clone()
         self.additional_noise_tensor = self.input_tensor.detach().clone()
 
-    def _build_model(self):
-        self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
-                                                    num_output_channels=self.img_shape[-1],
-                                                    num_channels_down=self.args.filters,
-                                                    num_channels_up=self.args.filters,
-                                                    num_channels_skip=self.args.skip,
-                                                    upsample_mode=self.args.upsample,  # default is bilinear
-                                                    need_sigmoid=self.args.need_sigmoid,
-                                                    need_bias=True,
-                                                    pad=self.args.pad,  # default is reflection, but Fantong uses zero
-                                                    act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
-                                                    ).type(self.dtype),
-                                       self.prnu_clean_tensor)
+    def _build_model(self, gamma=None):
+        if gamma is None:
+            self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
+                                                        num_output_channels=self.img_shape[-1],
+                                                        num_channels_down=self.args.filters,
+                                                        num_channels_up=self.args.filters,
+                                                        num_channels_skip=self.args.skip,
+                                                        upsample_mode=self.args.upsample,  # default is bilinear
+                                                        need_sigmoid=self.args.need_sigmoid,
+                                                        need_bias=True,
+                                                        pad=self.args.pad,  # default is reflection, but Fantong uses zero
+                                                        act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
+                                                        ).type(self.dtype),
+                                           self.prnu_injection_tensor,
+                                           gamma_init=self.args.gamma_init,
+                                           use_relu=self.args.gamma_relu)
+        else:
+            self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
+                                    num_output_channels=self.img_shape[-1],
+                                    num_channels_down=self.args.filters,
+                                    num_channels_up=self.args.filters,
+                                    num_channels_skip=self.args.skip,
+                                    upsample_mode=self.args.upsample,  # default is bilinear
+                                    need_sigmoid=self.args.need_sigmoid,
+                                    need_bias=True,
+                                    pad=self.args.pad,  # default is reflection, but Fantong uses zero
+                                    act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
+                                    ).type(self.dtype)
 
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
@@ -168,13 +184,22 @@ class Training:
             raise ValueError('The loaded image shape has to be', self.img_shape)
         self.img_tensor = u.numpy2torch(np.swapaxes(self.img, 2, 0)[np.newaxis])
 
-    def load_prnu(self, device_path):
+    def load_prnu(self, device_path, policy='clean'):
+
         # clean PRNU to be added to the output
-        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.jpg else
-                                                                            '')))['prnu']
-        if self.prnu_clean.shape != self.img_shape[:2]:
+        if policy == 'clean':
+            self.prnu_injection = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.jpg else '')))['prnu']
+        elif policy == 'wiener':
+            self.prnu_injection = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % ('_comp' if self.args.jpg else '')))['prnu']
+        elif policy == 'extract':
+            assert self.img is not None, 'No image has been loaded'
+            self.prnu_injection = u.prnu.extract_single(u.float2png(u.rgb2gray(self.img)), sigma=3)
+        else:
+            raise ValueError('PRNU policy has to be clean, wiener or extract')
+
+        if self.prnu_injection.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
-        self.prnu_clean_tensor = u.numpy2torch(self.prnu_clean[np.newaxis, np.newaxis])
+        self.prnu_injection_tensor = u.numpy2torch(self.prnu_injection[np.newaxis, np.newaxis])
 
         # filtered PRNU for computing the NCC
         if not self.args.nccw_skip:
@@ -202,7 +227,13 @@ class Training:
         if self.args.dncnn > 0. or self.args.nccd:
             noise_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
 
-        mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
+        if self.args.gamma is None:  # gamma is estimated by the net
+            mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
+        elif self.args.gamma == 0.:  # no PRNU is injected
+            mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
+        else:
+            mse = self.l2dist(self.mask_tensor * u.add_prnu(output_tensor, self.prnu_injection_tensor, weight=self.args.gamma),
+                              self.mask_tensor * self.img_tensor)
 
         dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
@@ -237,6 +268,10 @@ class Training:
         msg += ', SSIM=%.4f' % self.history['ssim'][-1]
 
         # CPU operations
+        if self.args.gamma is None:
+            self.gamma_list.append(float(self.net.prnu_injection.weight.detach().cpu().numpy().squeeze()))
+        else:
+            self.gamma_list.append(self.args.gamma)
         out_img = u.float2png(np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1))
 
         if self.args.nccw_runtime:
@@ -350,7 +385,7 @@ class Training:
             'elapsed time': u.sec2time(self.elapsed),
             'history': self.history,
             'args': self.args,
-            'prnu': self.prnu_clean,
+            'prnu': self.prnu_injection,
             'prnu4ncc': self.prnu_4ncc,
             'image': self.img,
             'mask': self.mask,
@@ -358,7 +393,7 @@ class Training:
             'anonymized': self.out_img,
             'psnr_max': self.psnr_max,
             'params': self.num_params,
-            'gamma_opt': float(self.net.prnu_injection.weight.detach().cpu().numpy().squeeze()),
+            'gamma': self.gamma_list,
             'attempt': attempt
         }
         outname = self.image_name.split('/')[-1] + '_run%s' % str(attempt).zfill(u.ten_digit(self.args.attempts))
@@ -397,6 +432,7 @@ class Training:
         self._build_model()
         self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_d': [], 'vgg19': []}
         self.out_list = []
+        self.gamma_list = []
         self.mask = None
         self.edges = None
         self.optimizer = None
@@ -433,6 +469,9 @@ def _parse_args():
                         help='Random Seed list for each attempt (default 0 for every attempt).')
     parser.add_argument('--exit_first_drop', type=bool, default=False, required=False,
                         help='Exit after the first big drop of PSNR')
+    parser.add_argument('--prnu', type=str, default='clean', required=False,
+                        choices=['clean', 'wiener', 'extract'],
+                        help='Which PRNU to inject: clean, wiener or extracted from the picture')
     # network design
     parser.add_argument('--network', type=str, required=False, default='multires', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -451,9 +490,22 @@ def _parse_args():
     parser.add_argument('--upsample', type=str, required=False, default='nearest',
                         choices=['nearest', 'bilinear', 'deconv'],
                         help='Upgoing deconvolution strategy for the network')
-    # training parameter
+    # optimizer
+    parser.add_argument('--epochs', '-e', type=int, required=False, default=10001,
+                        help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, required=False, default='adam', choices=['adam', 'lbfgs', 'sgd'],
                         help='Optimizer to be used')
+    parser.add_argument('--use_scheduler', action='store_true',
+                        help='Use ReduceLROnPlateau scheduler.')
+    parser.add_argument('--lr', type=float, default=1e-3, required=False,
+                        help='Learning Rate for Adam optimizer')
+    parser.add_argument('--lr_factor', type=float, default=.9, required=False,
+                        help='LR reduction for Plateau scheduler.')
+    parser.add_argument('--lr_thresh', type=float, default=1e-4, required=False,
+                        help='LR threshold for Plateau scheduler.')
+    parser.add_argument('--lr_patience', type=int, default=10, required=False,
+                        help='LR patience for Plateau scheduler.')
+    # loss
     parser.add_argument('--nccd', action='store_true',
                         help='Compute and save the NCC curve computed through DnCNN.')
     parser.add_argument('--ssim', type=float, required=False, default=0.00,
@@ -464,16 +516,13 @@ def _parse_args():
                         help='Coefficient for the VGG19 perceptual loss')
     parser.add_argument('--perc_layers', type=str, required=False, default='1,6,11,20,29',
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
-    parser.add_argument('--epochs', '-e', type=int, required=False, default=10001,
-                        help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=1e-3, required=False,
-                        help='Learning Rate for Adam optimizer')
-    parser.add_argument('--save_png_every', type=int, default=0, required=False,
-                        help='Number of epochs every which to save the results')
-    parser.add_argument('--psnr_min', type=float, default=30., required=False,
-                        help='Minimum PSNR for saving the image (DEPRECATED).')
-    parser.add_argument('--psnr_max', type=float, required=False,
-                        help='Maximum PSNR for quitting the optimization.')
+    parser.add_argument('--gamma', type=float, required=False,
+                        help='Fix gamma parameter.')
+    parser.add_argument('--gamma_init', type=float, required=False, default=None,
+                        help='Init value for gamma layer [None default - random]')
+    parser.add_argument('--gamma_relu', type=bool, required=False, default=False,
+                        help='Use reLU activation for PRNU injection [False]')
+    # deep prior strategies
     parser.add_argument('--param_noise', action='store_true',
                         help='Add normal noise to the parameters every epoch')
     parser.add_argument('--reg_noise_std', type=float, required=False, default=0.1,
@@ -490,18 +539,16 @@ def _parse_args():
                         help='Sigma value for edge detection canny algorithm.')
     parser.add_argument('--attempts', type=int, default=1, required=False,
                         help='Number of attempts to be performed on the same picture.')
-    parser.add_argument('--use_scheduler', action='store_true',
-                        help='Use ReduceLROnPlateau scheduler.')
-    parser.add_argument('--lr_factor', type=float, default=.9, required=False,
-                        help='LR reduction for Plateau scheduler.')
-    parser.add_argument('--lr_thresh', type=float, default=1e-4, required=False,
-                        help='LR threshold for Plateau scheduler.')
-    parser.add_argument('--lr_patience', type=int, default=10, required=False,
-                        help='LR patience for Plateau scheduler.')
     parser.add_argument('--gradient_clip', type=float, required=False,
                         help='Gradient clipping value (NOT IMPLEMENTED).')
     parser.add_argument('--reload_patience', type=int, default=500, required=False,
                         help='Number of epoch to be waited before reloading the saved model checkpoint.')
+    parser.add_argument('--save_png_every', type=int, default=0, required=False,
+                        help='Number of epochs every which to save the results')
+    parser.add_argument('--psnr_min', type=float, default=30., required=False,
+                        help='Minimum PSNR for saving the image (DEPRECATED).')
+    parser.add_argument('--psnr_max', type=float, required=False,
+                        help='Maximum PSNR for quitting the optimization.')
 
     args = parser.parse_args()
     if args.seeds is None:
@@ -541,7 +588,8 @@ def main():
     for device in device_list:  # ./dataset/device
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
 
-        T.load_prnu(device)
+        if args.prnu != 'extract':
+            T.load_prnu(device, policy=args.prnu)
 
         if args.pics_IDs is not None:  # load specified image
             pic_list = [os.path.join(device, device.split('/')[-1] + '_%s.%s'
@@ -554,8 +602,12 @@ def main():
         for picpath in pic_list:
             for attempt in range(args.attempts):
                 _set_seed(args.seeds[attempt])
-                T._build_model()
                 T.load_image(picpath)
+                if args.prnu == 'extract':
+                    T.load_prnu(device, policy=args.prnu)
+
+                T._build_model(gamma=args.gamma)
+
                 T.build_mask(strategy=args.mask_strategy, sigma=args.edges_sigma)
                 T.attempt = attempt
                 T.optimize()
@@ -568,7 +620,7 @@ def main():
 
     if args.slack:
         os.system(
-            'python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
+            'python $SLACKDIR/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
             % ' '.join(sys.argv).split('.py')[-1][1:])
 
 
