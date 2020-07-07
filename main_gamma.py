@@ -115,8 +115,7 @@ class Training:
                                                         act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
                                                         ).type(self.dtype),
                                            self.prnu_injection_tensor,
-                                           gamma_init=self.args.gamma_init,
-                                           use_relu=self.args.gamma_relu)
+                                           gamma_init=self.args.gamma_init)
         else:
             self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
                                     num_output_channels=self.img_shape[-1],
@@ -202,7 +201,7 @@ class Training:
         self.prnu_injection_tensor = u.numpy2torch(self.prnu_injection[np.newaxis, np.newaxis])
 
         # filtered PRNU for computing the NCC
-        if not self.args.nccw_skip:
+        if self.args.nccw != 'skip':
             self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat'
                                                   % ('_comp' if self.args.jpg else '')))['prnu']
             if self.prnu_4ncc.shape != self.img_shape[:2]:
@@ -274,7 +273,7 @@ class Training:
             self.gamma_list.append(self.args.gamma)
         out_img = u.float2png(np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1))
 
-        if self.args.nccw_runtime:
+        if self.args.nccw == 'runtime':
             self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
                                                u.prnu.extract_single(out_img, sigma=3)))
             msg += ', NCC_w=%+.4f' % self.history['ncc_w'][-1]
@@ -358,9 +357,13 @@ class Training:
                 loss, exit_flag = self._optimization_loop()
                 if exit_flag:
                     break
+
                 self.optimizer.step()
                 if self.scheduler:
                     self.scheduler.step(loss)
+                if self.args.gamma_positive:
+                    with torch.set_grad_enabled(False):
+                        self.net.prnu_injection.weight.clamp_(0)
 
         elif self.args.optimizer == 'sgd':
             self.optimizer = torch.optim.SGD(self.parameters, lr=self.args.lr,
@@ -457,17 +460,14 @@ def _parse_args():
                         help='Run name in ./results/')
     parser.add_argument('--jpg', action='store_true',
                         help='Use the JPEG dataset')
-    parser.add_argument('--slack', action='store_true',
-                        help='Send a message to slack')
-    parser.add_argument('--save_outputs', type=bool, default=False, required=False,
+    parser.add_argument('--save_outputs', action='store_true', default=False,
                         help='Save every network output to disk in a hdf5 file.')
-    parser.add_argument('--nccw_runtime', type=bool, default=False, required=False,
-                        help='Compute NCC at runtime (it slows down the training phase as it is done on CPU)')
-    parser.add_argument('--nccw_skip', type=bool, default=True, required=False,
-                        help='Skip the computation of NCC (and thus save the output image list)')
+    parser.add_argument('--nccw', type=str, required=False, default='skip',
+                        choices=['skip', 'end', 'runtime'],
+                        help='When  to compute NCC (on CPU)')
     parser.add_argument('--seeds', nargs='+', type=int, required=False,
                         help='Random Seed list for each attempt (default 0 for every attempt).')
-    parser.add_argument('--exit_first_drop', type=bool, default=False, required=False,
+    parser.add_argument('--exit_first_drop', action='store_true', default=False,
                         help='Exit after the first big drop of PSNR')
     parser.add_argument('--prnu', type=str, default='clean', required=False,
                         choices=['clean', 'wiener', 'extract'],
@@ -495,7 +495,7 @@ def _parse_args():
                         help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, required=False, default='adam', choices=['adam', 'lbfgs', 'sgd'],
                         help='Optimizer to be used')
-    parser.add_argument('--use_scheduler', action='store_true',
+    parser.add_argument('--use_scheduler', action='store_true', default=False,
                         help='Use ReduceLROnPlateau scheduler.')
     parser.add_argument('--lr', type=float, default=1e-3, required=False,
                         help='Learning Rate for Adam optimizer')
@@ -518,12 +518,12 @@ def _parse_args():
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
     parser.add_argument('--gamma', type=float, required=False,
                         help='Fix gamma parameter.')
-    parser.add_argument('--gamma_init', type=float, required=False, default=None,
+    parser.add_argument('--gamma_init', type=float, required=False,
                         help='Init value for gamma layer [None default - random]')
-    parser.add_argument('--gamma_relu', type=bool, required=False, default=False,
-                        help='Use reLU activation for PRNU injection [False]')
+    parser.add_argument('--gamma_positive', default=False, action='store_true',
+                        help='Clamp PRNU injection weight to be positive [False]')
     # deep prior strategies
-    parser.add_argument('--param_noise', action='store_true',
+    parser.add_argument('--param_noise', action='store_true', default=False,
                         help='Add normal noise to the parameters every epoch')
     parser.add_argument('--reg_noise_std', type=float, required=False, default=0.1,
                         help='Standard deviation of the normal noise to be added to the input every epoch')
@@ -556,7 +556,7 @@ def _parse_args():
     elif len(args.seeds) == 1:
         args.seeds = [args.seeds[0]] * args.attempts
     assert len(args.seeds) == args.attempts, 'Provided seed list has to have a length of the attempts'
-    if args.nccw_skip:
+    if args.nccw == 'skip':
         args.save_outputs = True
     return args
 
@@ -611,17 +611,12 @@ def main():
                 T.build_mask(strategy=args.mask_strategy, sigma=args.edges_sigma)
                 T.attempt = attempt
                 T.optimize()
-                if not args.nccw_runtime and not args.nccw_skip:  # compute NCC on CPU at the end of the optimization
+                if args.nccw == 'end':  # compute NCC on CPU at the end of the optimization
                     T.compute_nccw()
                 T.save_result(attempt, args.save_outputs)
                 T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
-
-    if args.slack:
-        os.system(
-            'python $SLACKDIR/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
-            % ' '.join(sys.argv).split('.py')[-1][1:])
 
 
 if __name__ == '__main__':

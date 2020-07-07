@@ -793,10 +793,9 @@ def MulResUnet(num_input_channels=2, num_output_channels=3,
 
 
 class MultiResInjection(nn.Module):
-    def __init__(self, multires, prnu_tensor, gamma_init=None, use_relu=False):
+    def __init__(self, multires, prnu_tensor, gamma_init=None):
         super(MultiResInjection, self).__init__()
 
-        self.use_relu = use_relu
         self.multires = multires
         self.prnu_tensor = prnu_tensor
         self.prnu_injection = nn.Conv2d(1, 1, kernel_size=1, bias=False).type(torch.cuda.FloatTensor)
@@ -806,7 +805,5 @@ class MultiResInjection(nn.Module):
     def forward(self, x):
         x = self.multires(x)
         weighted_prnu = self.prnu_injection(self.prnu_tensor)
-        if self.use_relu:
-            weighted_prnu = nn.ReLU()(weighted_prnu)
         x = x * (1 + weighted_prnu)
         return x
