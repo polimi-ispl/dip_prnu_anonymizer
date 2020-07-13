@@ -56,7 +56,7 @@ def noise_extract(im: np.ndarray, levels: int = 4, sigma: float = 5) -> np.ndarr
     :return: noise residual
     """
 
-    assert (im.dtype == np.uint8)
+    # assert (im.dtype == np.uint8)
     assert (im.ndim in [2, 3])
 
     im = im.astype(np.float32)
