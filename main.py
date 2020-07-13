@@ -1,8 +1,6 @@
 from __future__ import print_function
 import warnings
 
-# from torch.nn.utils import clip_grad_value_
-
 warnings.filterwarnings("ignore")
 
 import os
@@ -43,6 +41,7 @@ class Training:
         self.outpath = outpath
         self.img_shape = img_shape
         self.out_list = []
+        self.gamma_list = []
         self.attempt = 0
 
         # losses
@@ -61,8 +60,8 @@ class Training:
         self.image_name = None
         self.img = None
         self.img_tensor = None
-        self.prnu_clean = None
-        self.prnu_clean_tensor = None
+        self.prnu_injection = None
+        self.prnu_injection_tensor = None
         self.prnu_4ncc = None
         self.prnu_4ncc_tensor = None
         self.out_img = None
@@ -102,33 +101,22 @@ class Training:
         self.input_tensor_old = self.input_tensor.detach().clone()
         self.additional_noise_tensor = self.input_tensor.detach().clone()
 
-    def _build_model(self):
-        if self.args.network == 'unet':
-            self.net = a.UNet(num_input_channels=self.args.input_depth,
-                              num_output_channels=self.img_shape[-1],
-                              filters=self.args.filters,
-                              more_layers=1,  # default is 0
-                              concat_x=False,
-                              upsample_mode=self.args.upsample,  # default is nearest
-                              activation=self.args.activation,
-                              pad=self.args.pad,  # default is zero
-                              norm_layer=torch.nn.InstanceNorm2d,
-                              need_sigmoid=self.args.need_sigmoid,
-                              need_bias=True
-                              ).type(self.dtype)
-        elif self.args.network == 'skip':
-            self.net = a.Skip(num_input_channels=self.args.input_depth,
-                              num_output_channels=self.img_shape[-1],
-                              num_channels_down=self.args.filters,
-                              num_channels_up=self.args.filters,
-                              num_channels_skip=self.args.skip,
-                              upsample_mode=self.args.upsample,  # default is bilinear
-                              need_sigmoid=self.args.need_sigmoid,
-                              need_bias=True,
-                              pad=self.args.pad,  # default is reflection, but Fantong uses zero
-                              act_fun=self.args.activation  # default is LeakyReLU
-                              ).type(self.dtype)
-        elif self.args.network == 'multires':
+    def build_model(self, gamma=None):
+        if gamma is None:
+            self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
+                                                        num_output_channels=self.img_shape[-1],
+                                                        num_channels_down=self.args.filters,
+                                                        num_channels_up=self.args.filters,
+                                                        num_channels_skip=self.args.skip,
+                                                        upsample_mode=self.args.upsample,  # default is bilinear
+                                                        need_sigmoid=self.args.need_sigmoid,
+                                                        need_bias=True,
+                                                        pad=self.args.pad,  # default is reflection, but Fantong uses zero
+                                                        act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
+                                                        ).type(self.dtype),
+                                           self.prnu_injection_tensor,
+                                           gamma_init=self.args.gamma_init)
+        else:
             self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
                                     num_output_channels=self.img_shape[-1],
                                     num_channels_down=self.args.filters,
@@ -140,8 +128,7 @@ class Training:
                                     pad=self.args.pad,  # default is reflection, but Fantong uses zero
                                     act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
                                     ).type(self.dtype)
-        else:
-            raise ValueError('ERROR! The network has to be either unet or skip or multires')
+
         self.parameters = get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
@@ -186,26 +173,45 @@ class Training:
         self.imgpath = image_path
         self.image_name = self.imgpath.split('.')[-2].split('/')[-1]
 
-        # if PNG, imread normalizes to 0, 1
-        # if JPEG, we must do it by hand
-        self.img = u.crop_center(mpimg.imread(image_path), self.img_shape[0], self.img_shape[1])
-        if self.imgpath.split('.')[-1] in ['JPEG', 'JPG', 'jpeg', 'jpg']:
-            self.img = u.normalize(self.img, 0, 255, False)[0]
+        _ext = os.path.splitext(self.imgpath)[-1].lower()
+
+        if _ext == '.npy':
+            self.img = u.normalize(np.load(self.imgpath), zero_mean=False)[0]
+        elif _ext == '.png':  # imread normalizes to 0, 1
+            self.img = mpimg.imread(self.imgpath)
+        elif _ext in ['.jpeg', '.jpg']:
+            self.img = u.normalize(mpimg.imread(self.imgpath), in_min=0, in_max=255, zero_mean=False)[0]
+        else:
+            raise ValueError('Invalid image file extension: it has to be npy, png or jpg')
+
+        self.img = u.crop_center(self.img, self.img_shape[0], self.img_shape[1])
 
         if self.img.shape != self.img_shape:
             raise ValueError('The loaded image shape has to be', self.img_shape)
         self.img_tensor = u.numpy2torch(np.swapaxes(self.img, 2, 0)[np.newaxis])
 
-    def load_prnu(self, device_path):
+    def load_prnu(self, device_path, policy='clean'):
+
         # clean PRNU to be added to the output
-        self.prnu_clean = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.jpg else
-                                                                            '')))['prnu']
-        if self.prnu_clean.shape != self.img_shape[:2]:
+        if policy == 'clean':
+            self.prnu_injection = loadmat(os.path.join(device_path, 'prnu%s.mat' % ('_comp' if self.args.jpg else '')))['prnu']
+        elif policy == 'wiener':
+            self.prnu_injection = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat' % ('_comp' if self.args.jpg else '')))['prnu']
+        elif policy == 'extract':  # TODO fix rgb2gray, it  is called twice (here and in extract_single)
+            assert self.img is not None, 'No image has been loaded'
+            if 'float' in device_path:
+                self.prnu_injection = u.prnu.extract_single(u.rgb2gray(self.img), sigma=3/255)
+            else:
+                self.prnu_injection = u.prnu.extract_single(u.float2png(u.rgb2gray(self.img)), sigma=3)
+        else:
+            raise ValueError('PRNU policy has to be clean, wiener or extract')
+
+        if self.prnu_injection.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
-        self.prnu_clean_tensor = u.numpy2torch(self.prnu_clean[np.newaxis, np.newaxis])
+        self.prnu_injection_tensor = u.numpy2torch(self.prnu_injection[np.newaxis, np.newaxis])
 
         # filtered PRNU for computing the NCC
-        if not self.args.nccw_skip:
+        if self.args.nccw != 'skip':
             self.prnu_4ncc = loadmat(os.path.join(device_path, 'prnuZM_W%s.mat'
                                                   % ('_comp' if self.args.jpg else '')))['prnu']
             if self.prnu_4ncc.shape != self.img_shape[:2]:
@@ -216,7 +222,7 @@ class Training:
         self.edges = binary_dilation(canny(u.rgb2gray(self.img), sigma=sigma))
 
     def _optimization_loop(self):
-        if self.args.param_noise:  # TODO fix param_noise
+        if self.args.param_noise:
             for n in [x for x in self.net.parameters() if len(x.size()) == 4]:
                 _n = n.detach().clone().normal_(std=float(n.std())/50)
                 n = n + _n
@@ -227,15 +233,16 @@ class Training:
 
         output_tensor = self.net(input_tensor)
 
+        if self.args.gamma is None:  # gamma is estimated by the net
+            mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
+        elif self.args.gamma == 0.:  # no PRNU is injected
+            mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
+        else:  # gamma is fixed by the user
+            mse = self.l2dist(self.mask_tensor * u.add_prnu(output_tensor, self.prnu_injection_tensor, weight=self.args.gamma),
+                              self.mask_tensor * self.img_tensor)
+
         if self.args.dncnn > 0. or self.args.nccd:
             noise_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
-
-        if self.args.gamma == 0.:  # MSE between reference image and output image
-            mse = self.l2dist(self.mask_tensor * output_tensor, self.mask_tensor * self.img_tensor)
-        else:  # MSE between reference image and output image with true PRNU (weighted by gamma)
-            mse = self.l2dist(
-                self.mask_tensor * u.add_prnu(output_tensor, self.prnu_clean_tensor, weight=self.args.gamma),
-                self.mask_tensor * self.img_tensor)
 
         dncnn_loss = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), noise_dncnn) if self.args.dncnn else 0.
         ssim_loss = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
@@ -243,11 +250,6 @@ class Training:
 
         total_loss = mse + self.args.ssim * ssim_loss + self.args.dncnn * dncnn_loss + self.args.perc * perc_loss
         total_loss.backward()
-
-        # gradient clipping
-        if self.args.gradient_clip is not None:
-            raise ValueError('No gradient clipping function is defined')
-            # clip_grad_value_(self.net.parameters(), self.args.gradient_clip)
 
         # Save and display loss terms
         self.history['loss'].append(total_loss.item())
@@ -275,9 +277,17 @@ class Training:
         msg += ', SSIM=%.4f' % self.history['ssim'][-1]
 
         # CPU operations
-        out_img = u.float2png(np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1))
+        if self.args.gamma is None:
+            self.gamma_list.append(float(self.net.prnu_injection.weight.detach().cpu().numpy().squeeze()))
+        else:
+            self.gamma_list.append(self.args.gamma)
 
-        if self.args.nccw_runtime:
+        if 'float' in self.imgpath:
+            out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
+        else:
+            out_img = u.float2png(np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1))
+
+        if self.args.nccw == 'runtime':
             self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
                                                u.prnu.extract_single(out_img, sigma=3)))
             msg += ', NCC_w=%+.4f' % self.history['ncc_w'][-1]
@@ -317,23 +327,9 @@ class Training:
                                     self.scheduler.load_state_dict(checkpoint['sched'])
                                 self.reload_counter = 0
 
-        # # save if the PSNR is increasing (above a threshold) and only every tot iterations
-        # if self.psnr_max < self.history['psnr'][-1]:
-        #     self.psnr_max = self.history['psnr'][-1]
-        #     if self.args.save_png_every and \
-        #             self.psnr_max > self.args.psnr_min and \
-        #             self.iiter > 0 \
-        #             and self.saving_interval >= self.args.save_png_every:
-        #         self.out_img = out_img
-        #         outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
-        #         Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
-        #         self.saving_interval = 0
-
         # save last image if none of the above conditions are respected
         if self.out_img is None and self.iiter == self.args.epochs:
             self.out_img = out_img
-        #     outname = self.image_name + '_i' + str(self.iiter).zfill(u.ten_digit(self.args.epochs))
-        #     Image.fromarray(u.float2png(self.out_img)).save(os.path.join(self.outpath, outname))
 
         self.iiter += 1
         self.saving_interval += 1
@@ -375,9 +371,13 @@ class Training:
                 loss, exit_flag = self._optimization_loop()
                 if exit_flag:
                     break
+
                 self.optimizer.step()
                 if self.scheduler:
                     self.scheduler.step(loss)
+                if self.args.gamma_positive:
+                    with torch.set_grad_enabled(False):
+                        self.net.prnu_injection.weight.clamp_(0)
 
         elif self.args.optimizer == 'sgd':
             self.optimizer = torch.optim.SGD(self.parameters, lr=self.args.lr,
@@ -402,7 +402,7 @@ class Training:
             'elapsed time': u.sec2time(self.elapsed),
             'history': self.history,
             'args': self.args,
-            'prnu': self.prnu_clean,
+            'prnu': self.prnu_injection,
             'prnu4ncc': self.prnu_4ncc,
             'image': self.img,
             'mask': self.mask,
@@ -410,6 +410,7 @@ class Training:
             'anonymized': self.out_img,
             'psnr_max': self.psnr_max,
             'params': self.num_params,
+            'gamma': self.gamma_list,
             'attempt': attempt
         }
         outname = self.image_name.split('/')[-1] + '_run%s' % str(attempt).zfill(u.ten_digit(self.args.attempts))
@@ -445,9 +446,10 @@ class Training:
         print('')
         torch.cuda.empty_cache()
         self._build_input()
-        self._build_model()
+        self.build_model()
         self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc_w': [], 'ncc_d': [], 'vgg19': []}
         self.out_list = []
+        self.gamma_list = []
         self.mask = None
         self.edges = None
         self.optimizer = None
@@ -472,18 +474,18 @@ def _parse_args():
                         help='Run name in ./results/')
     parser.add_argument('--jpg', action='store_true',
                         help='Use the JPEG dataset')
-    parser.add_argument('--slack', action='store_true',
-                        help='Send a message to slack')
-    parser.add_argument('--save_outputs', type=bool, default=False, required=False,
+    parser.add_argument('--save_outputs', action='store_true', default=False,
                         help='Save every network output to disk in a hdf5 file.')
-    parser.add_argument('--nccw_runtime', type=bool, default=False, required=False,
-                        help='Compute NCC at runtime (it slows down the training phase as it is done on CPU)')
-    parser.add_argument('--nccw_skip', type=bool, default=True, required=False,
-                        help='Skip the computation of NCC (and thus save the output image list)')
+    parser.add_argument('--nccw', type=str, required=False, default='skip',
+                        choices=['skip', 'end', 'runtime'],
+                        help='When  to compute NCC (on CPU)')
     parser.add_argument('--seeds', nargs='+', type=int, required=False,
                         help='Random Seed list for each attempt (default 0 for every attempt).')
-    parser.add_argument('--exit_first_drop', type=bool, default=False, required=False,
+    parser.add_argument('--exit_first_drop', action='store_true', default=False,
                         help='Exit after the first big drop of PSNR')
+    parser.add_argument('--prnu', type=str, default='clean', required=False,
+                        choices=['clean', 'wiener', 'extract'],
+                        help='Which PRNU to inject: clean, wiener or extracted from the picture')
     # network design
     parser.add_argument('--network', type=str, required=False, default='multires', choices=['unet', 'skip', 'multires'],
                         help='Name of the network to be used')
@@ -502,9 +504,22 @@ def _parse_args():
     parser.add_argument('--upsample', type=str, required=False, default='nearest',
                         choices=['nearest', 'bilinear', 'deconv'],
                         help='Upgoing deconvolution strategy for the network')
-    # training parameter
+    # optimizer
+    parser.add_argument('--epochs', '-e', type=int, required=False, default=10001,
+                        help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, required=False, default='adam', choices=['adam', 'lbfgs', 'sgd'],
                         help='Optimizer to be used')
+    parser.add_argument('--use_scheduler', action='store_true', default=False,
+                        help='Use ReduceLROnPlateau scheduler.')
+    parser.add_argument('--lr', type=float, default=1e-3, required=False,
+                        help='Learning Rate for Adam optimizer')
+    parser.add_argument('--lr_factor', type=float, default=.9, required=False,
+                        help='LR reduction for Plateau scheduler.')
+    parser.add_argument('--lr_thresh', type=float, default=1e-4, required=False,
+                        help='LR threshold for Plateau scheduler.')
+    parser.add_argument('--lr_patience', type=int, default=10, required=False,
+                        help='LR patience for Plateau scheduler.')
+    # loss
     parser.add_argument('--nccd', action='store_true',
                         help='Compute and save the NCC curve computed through DnCNN.')
     parser.add_argument('--ssim', type=float, required=False, default=0.00,
@@ -515,19 +530,14 @@ def _parse_args():
                         help='Coefficient for the VGG19 perceptual loss')
     parser.add_argument('--perc_layers', type=str, required=False, default='1,6,11,20,29',
                         help='Comma-separated layers indexes for the VGG19 perceptual loss')
-    parser.add_argument('--gamma', type=float, required=False, default=0.01,
-                        help='Coefficient for adding the PRNU')
-    parser.add_argument('--epochs', '-e', type=int, required=False, default=10001,
-                        help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=1e-3, required=False,
-                        help='Learning Rate for Adam optimizer')
-    parser.add_argument('--save_png_every', type=int, default=0, required=False,
-                        help='Number of epochs every which to save the results')
-    parser.add_argument('--psnr_min', type=float, default=30., required=False,
-                        help='Minimum PSNR for saving the image (DEPRECATED).')
-    parser.add_argument('--psnr_max', type=float, required=False,
-                        help='Maximum PSNR for quitting the optimization.')
-    parser.add_argument('--param_noise', action='store_true',
+    parser.add_argument('--gamma', type=float, required=False,
+                        help='Fix gamma parameter.')
+    parser.add_argument('--gamma_init', type=float, required=False,
+                        help='Init value for gamma layer [None default - random]')
+    parser.add_argument('--gamma_positive', default=False, action='store_true',
+                        help='Clamp PRNU injection weight to be positive [False]')
+    # deep prior strategies
+    parser.add_argument('--param_noise', action='store_true', default=False,
                         help='Add normal noise to the parameters every epoch')
     parser.add_argument('--reg_noise_std', type=float, required=False, default=0.1,
                         help='Standard deviation of the normal noise to be added to the input every epoch')
@@ -543,18 +553,16 @@ def _parse_args():
                         help='Sigma value for edge detection canny algorithm.')
     parser.add_argument('--attempts', type=int, default=1, required=False,
                         help='Number of attempts to be performed on the same picture.')
-    parser.add_argument('--use_scheduler', action='store_true',
-                        help='Use ReduceLROnPlateau scheduler.')
-    parser.add_argument('--lr_factor', type=float, default=.9, required=False,
-                        help='LR reduction for Plateau scheduler.')
-    parser.add_argument('--lr_thresh', type=float, default=1e-4, required=False,
-                        help='LR threshold for Plateau scheduler.')
-    parser.add_argument('--lr_patience', type=int, default=10, required=False,
-                        help='LR patience for Plateau scheduler.')
     parser.add_argument('--gradient_clip', type=float, required=False,
                         help='Gradient clipping value (NOT IMPLEMENTED).')
     parser.add_argument('--reload_patience', type=int, default=500, required=False,
                         help='Number of epoch to be waited before reloading the saved model checkpoint.')
+    parser.add_argument('--save_png_every', type=int, default=0, required=False,
+                        help='Number of epochs every which to save the results')
+    parser.add_argument('--psnr_min', type=float, default=30., required=False,
+                        help='Minimum PSNR for saving the image (DEPRECATED).')
+    parser.add_argument('--psnr_max', type=float, required=False,
+                        help='Maximum PSNR for quitting the optimization.')
 
     args = parser.parse_args()
     if args.seeds is None:
@@ -562,7 +570,7 @@ def _parse_args():
     elif len(args.seeds) == 1:
         args.seeds = [args.seeds[0]] * args.attempts
     assert len(args.seeds) == args.attempts, 'Provided seed list has to have a length of the attempts'
-    if args.nccw_skip:
+    if args.nccw == 'skip':
         args.save_outputs = True
     return args
 
@@ -594,35 +602,43 @@ def main():
     for device in device_list:  # ./dataset/device
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
 
-        T.load_prnu(device)
+        if args.prnu != 'extract':
+            T.load_prnu(device, policy=args.prnu)
+
+        if args.jpg:
+            _ext = 'JPG'
+        else:
+            _ext = 'png'
+        if 'float' in device:
+            _ext = 'npy'
 
         if args.pics_IDs is not None:  # load specified image
-            pic_list = [os.path.join(device, device.split('/')[-1] + '_%s.%s'
-                                     % (_, 'JPG' if args.jpg else 'png'))
-                        for _ in args.pics_IDs]
+            pic_list = [os.path.join(device, device.split('/')[-1] + '_%s.%s' % (_, _ext)) for _ in args.pics_IDs]
         else:
-            pic_list = sorted(glob(os.path.join(device, '*.JPG' if args.jpg else '*.png')))
+            pic_list = sorted(glob(os.path.join(device, '*.%s' % _ext)))
             pic_list = pic_list[pics_idx[0]:pics_idx[-1]]
+
+        if 'float' in device:
+            pic_list = [e for e in pic_list if 'initialnoise' not in e]
 
         for picpath in pic_list:
             for attempt in range(args.attempts):
                 _set_seed(args.seeds[attempt])
-                T._build_model()
                 T.load_image(picpath)
+                if args.prnu == 'extract':
+                    T.load_prnu(device, policy=args.prnu)
+
+                T.build_model(gamma=args.gamma)
+
                 T.build_mask(strategy=args.mask_strategy, sigma=args.edges_sigma)
                 T.attempt = attempt
                 T.optimize()
-                if not args.nccw_runtime and not args.nccw_skip:  # compute NCC on CPU at the end of the optimization
+                if args.nccw == 'end':  # compute NCC on CPU at the end of the optimization
                     T.compute_nccw()
                 T.save_result(attempt, args.save_outputs)
                 T.reset()
 
     print(colored('Anonymization done!', 'yellow'))
-
-    if args.slack:
-        os.system(
-            'python /nas/home/fpicetti/slack.py -u francesco.picetti -m "Finished _dip_prnu_anonymizer_ with \`%s\`"'
-            % ' '.join(sys.argv).split('.py')[-1][1:])
 
 
 if __name__ == '__main__':
