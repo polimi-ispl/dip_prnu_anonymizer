@@ -168,6 +168,8 @@ def normalize(x, in_min=None, in_max=None, zero_mean=True):
     if in_min is None and in_max is None:
         in_min = np.min(x)
         in_max = np.max(x)
+    if np.isclose(in_min, in_max):
+        raise ValueError("Error! Input minimum and maximum are too close!")
     x = (x - in_min) / (in_max - in_min)
     if zero_mean:
         x = x * 2 - 1
