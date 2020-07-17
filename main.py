@@ -561,7 +561,7 @@ def _parse_args():
                         help='Number of epochs every which to save the results')
     parser.add_argument('--psnr_min', type=float, default=30., required=False,
                         help='Minimum PSNR for saving the image (DEPRECATED).')
-    parser.add_argument('--psnr_max', type=float, required=False,
+    parser.add_argument('--psnr_max', type=float, required=False, default=39.,
                         help='Maximum PSNR for quitting the optimization.')
 
     args = parser.parse_args()
@@ -605,8 +605,8 @@ def main():
         if args.prnu != 'extract':
             T.load_prnu(device, policy=args.prnu)
 
-        if args.jpg:
-            _ext = 'JPG'
+        if args.jpg or args.dataset == 'vision':
+            _ext = 'jpg'  # TODO fix Dresden JPG extension
         else:
             _ext = 'png'
         if 'float' in device:
