@@ -793,17 +793,47 @@ def MulResUnet(num_input_channels=2, num_output_channels=3,
 
 
 class MultiResInjection(nn.Module):
-    def __init__(self, multires, prnu_tensor, gamma_init=None):
+    def __init__(self, unet, prnu_tensor, gamma_init=None):
         super(MultiResInjection, self).__init__()
 
-        self.multires = multires
+        self.unet = unet
         self.prnu_tensor = prnu_tensor
         self.prnu_injection = nn.Conv2d(1, 1, kernel_size=1, bias=False).type(torch.cuda.FloatTensor)
         if gamma_init is not None:
             self.prnu_injection.weight = nn.Parameter(torch.ones_like(self.prnu_injection.weight) * gamma_init)
 
     def forward(self, x):
-        x = self.multires(x)
+        x = self.unet(x)
+        weighted_prnu = self.prnu_injection(self.prnu_tensor)
+        x = x * (1 + weighted_prnu)
+        return x
+
+
+class Regularized_CNN_Injection(nn.Module):
+
+    def __init__(self, unet, prnu_tensor, gamma_init=None, reg_init=None):
+        """
+        :param unet        : deep prior CNN model
+        :param prnu_tensor : torch.Tensor - PRNU tensor
+        :param gamma_init  : float - gamma initial value (if None, randomly set)
+        :param reg_init    : float - regularizer initial weight (if None, randomly set)
+        """
+        super(Regularized_CNN_Injection, self).__init__()
+        self.unet = unet
+        self.prnu_tensor = prnu_tensor
+        self.reg_noise_std_init = reg_init
+
+        self.regularizer = nn.Conv2d(1, 1, kernel_size=1, bias=False).type(torch.cuda.FloatTensor)
+        self.prnu_injection = nn.Conv2d(1, 1, kernel_size=1, bias=False).type(torch.cuda.FloatTensor)
+        if gamma_init is not None:
+            self.prnu_injection.weight = nn.Parameter(torch.ones_like(self.prnu_injection.weight) * gamma_init)
+        if reg_init is not None:
+            self.regularizer.weight = nn.Parameter(torch.ones_like(self.regularizer.weight) * reg_init)
+
+    def forward(self, x):
+        if self.reg_noise_std_init is not None:
+            x = x + self.regularizer(x.detach.clone().normal_())
+        x = self.unet(x)
         weighted_prnu = self.prnu_injection(self.prnu_tensor)
         x = x * (1 + weighted_prnu)
         return x
