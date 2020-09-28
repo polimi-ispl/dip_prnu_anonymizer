@@ -4,12 +4,11 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import os
+import numpy as np
 import torch
 import h5py
 import matplotlib.image as mpimg
 from scipy.io import loadmat
-from skimage.feature import canny
-from skimage.morphology import binary_dilation
 from tqdm import trange
 
 torch.backends.cudnn.enabled = True
@@ -17,8 +16,7 @@ torch.backends.cudnn.benchmark = True
 dtype = torch.cuda.FloatTensor
 torch.backends.cudnn.deterministic = True
 import architectures as a
-from utils.common_utils import *
-from utils import utils as u
+import utils as u
 
 from argparse import ArgumentParser
 from time import time
@@ -43,6 +41,7 @@ class Training:
         self.out_list = []
         self.gamma_list = []
         self.attempt = 0
+        # self.dev = torch.device('cuda')
 
         # losses
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
@@ -83,7 +82,7 @@ class Training:
         self.optimizer = None
 
         if self.args.dncnn > 0. or self.args.nccd:
-            self.DnCNN = a.DnCNN().to(self.input_tensor.device)
+            self.DnCNN = a.DnCNN().to(self.dev)
         if self.args.perc > 0.:
             self.vgg19loss = a.PerceptualLoss(
                 input_range='sigmoid',  # tanh
@@ -95,13 +94,21 @@ class Training:
                 extractor=None
             ).type(self.dtype)
 
+    @property
+    def dev(self):
+        return self.input_tensor.device
+
     def _build_input(self):
-        self.input_tensor = get_noise(self.args.input_depth, 'noise', self.img_shape[:2],
-                                      noise_type=self.args.noise_dist, var=self.args.noise_std).type(dtype)
+        self.input_tensor = u.dip.get_noise(self.args.input_depth,
+                                            'noise',
+                                            self.img_shape[:2],
+                                            noise_type=self.args.noise_dist,
+                                            var=self.args.noise_std).type(dtype)
         self.input_tensor_old = self.input_tensor.detach().clone()
         self.additional_noise_tensor = self.input_tensor.detach().clone()
 
-    def build_model(self, gamma=None):
+    def build_model(self):
+        gamma = self.args.gamma
         if gamma is None:
             self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
                                                         num_output_channels=self.img_shape[-1],
@@ -129,45 +136,17 @@ class Training:
                                     act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
                                     ).type(self.dtype)
 
-        self.parameters = get_params('net', self.net, self.input_tensor)
+        self.parameters = u.dip.get_params('net', self.net, self.input_tensor)
         self.num_params = sum(np.prod(list(p.size())) for p in self.net.parameters())
 
-    def build_mask(self, strategy='all', sigma=3):
+    def build_mask(self):
         """Create a random mask either on the whole image or on the edges or on the flat zones"""
 
-        if strategy == 'edge':
-            if self.edges is None:
-                self._extract_edges(sigma)
-            rnd = (np.random.rand(np.sum(self.edges)) > self.args.deletion).astype(int)
-            randomized_edge = np.ones_like(self.edges).astype(int)
-            i = 0
-            for r in range(self.edges.shape[0]):
-                for c in range(self.edges.shape[1]):
-                    if self.edges[r, c] == 1:
-                        # print('edge in (%d, %d)' % (r, c))
-                        randomized_edge[r, c] = rnd[i]
-                        i += 1
-
-            self.mask = randomized_edge.reshape(self.edges.shape)
-            self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
-
-        elif strategy == 'flat':
-            if self.edges is None:
-                self._extract_edges(sigma)
-            self.mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int).reshape(self.img_shape[:2])
-            for r in range(self.edges.shape[0]):
-                for c in range(self.edges.shape[1]):
-                    if self.edges[r, c] == 1:
-                        self.mask[r, c] = 1
-            self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
-
-        elif strategy == 'all':
-            mask = (np.random.rand(np.prod(self.img_shape[:2])) > self.args.deletion).astype(int)
-            self.mask = mask.reshape(self.img_shape[:2])
-            self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis])
-
-        else:
-            raise ValueError('Invalid strategy for random mask generation')
+        self.mask = u.build_mask(self.img,
+                                 sigma=self.args.edges_sigma,
+                                 strategy=self.args.mask_strategy,
+                                 deletion=self.args.deletion)
+        self.mask_tensor = u.numpy2torch(self.mask[np.newaxis, np.newaxis]).to(self.dev)
 
     def load_image(self, image_path):
         self.imgpath = image_path
@@ -188,9 +167,11 @@ class Training:
 
         if self.img.shape != self.img_shape:
             raise ValueError('The loaded image shape has to be', self.img_shape)
-        self.img_tensor = u.numpy2torch(np.swapaxes(self.img, 2, 0)[np.newaxis])
+        self.img_tensor = u.numpy2torch(np.swapaxes(self.img, 2, 0)[np.newaxis]).to(self.dev)
 
-    def load_prnu(self, device_path, policy='clean'):
+    def load_prnu(self, device_path):
+
+        policy = self.args.prnu
 
         # clean PRNU to be added to the output
         if policy == 'clean':
@@ -200,7 +181,7 @@ class Training:
         elif policy == 'extract':  # TODO fix rgb2gray, it  is called twice (here and in extract_single)
             assert self.img is not None, 'No image has been loaded'
             if 'float' in device_path:
-                self.prnu_injection = u.prnu.extract_single(u.rgb2gray(self.img), sigma=3/255)
+                self.prnu_injection = u.prnu.extract_single(u.rgb2gray(self.img), sigma=3 / 255)
             else:
                 self.prnu_injection = u.prnu.extract_single(u.float2png(u.rgb2gray(self.img)), sigma=3)
         else:
@@ -208,7 +189,7 @@ class Training:
 
         if self.prnu_injection.shape != self.img_shape[:2]:
             raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
-        self.prnu_injection_tensor = u.numpy2torch(self.prnu_injection[np.newaxis, np.newaxis])
+        self.prnu_injection_tensor = u.numpy2torch(self.prnu_injection[np.newaxis, np.newaxis]).to(self.dev)
 
         # filtered PRNU for computing the NCC
         if self.args.nccw != 'skip':
@@ -216,10 +197,7 @@ class Training:
                                                   % ('_comp' if self.args.jpg else '')))['prnu']
             if self.prnu_4ncc.shape != self.img_shape[:2]:
                 raise ValueError('The loaded filtered PRNU shape has to be', self.img_shape[:2])
-            self.prnu_4ncc_tensor = u.numpy2torch(self.prnu_4ncc[np.newaxis, np.newaxis])
-
-    def _extract_edges(self, sigma=3):
-        self.edges = binary_dilation(canny(u.rgb2gray(self.img), sigma=sigma))
+            self.prnu_4ncc_tensor = u.numpy2torch(self.prnu_4ncc[np.newaxis, np.newaxis]).to(self.dev)
 
     def _optimization_loop(self):
         if self.args.param_noise:
@@ -270,7 +248,8 @@ class Training:
             msg += ', VGG19=%.2e' % self.history['vgg19'][-1]
 
         # Save and display evaluation metrics
-        self.history['psnr'].append(u.psnr(output_tensor * 255, self.img_tensor * 255, 1).item())
+        self.history['psnr'].append(u.psnr(u.float2png(output_tensor),
+                                           u.float2png(self.img_tensor), 1).item())
         msg += ', PSNR=%2.2f dB' % self.history['psnr'][-1]
 
         self.history['ssim'].append(u.ssim(self.img_tensor, output_tensor).item())
@@ -288,9 +267,9 @@ class Training:
             out_img = u.float2png(np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1))
 
         if self.args.nccw == 'runtime':
-            self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(out_img)),
+            self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.rgb2gray(out_img)),
                                                u.prnu.extract_single(out_img, sigma=3)))
-            msg += ', NCC_w=%+.4f' % self.history['ncc_w'][-1]
+            msg += ', NCC_w=%+.6f' % self.history['ncc_w'][-1]
         else:
             self.out_list.append(out_img)
 
@@ -436,8 +415,8 @@ class Training:
         print('\n')
         for o in trange(len(self.out_list), ncols=90,  unit='epoch',
                         desc='\tComputing NCC'):
-            self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu.rgb2gray(self.out_list[o])),
-                                         u.prnu.extract_single(u.float2png(self.out_list[o]), sigma=3)))
+            self.history['ncc_w'].append(u.ncc(self.prnu_4ncc * u.float2png(u.prnu._rgb2gray(self.out_list[o])),
+                                               u.prnu.extract_single(u.float2png(self.out_list[o]), sigma=3)))
 
     def reset(self):
         self.iiter = 0
@@ -603,10 +582,10 @@ def main():
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
 
         if args.prnu != 'extract':
-            T.load_prnu(device, policy=args.prnu)
+            T.load_prnu(device)
 
         if args.jpg or args.dataset == 'vision':
-            _ext = 'jpg'  # TODO fix Dresden JPG extension
+            _ext = 'jpg' if args.dataset == 'vision' else 'JPG'
         else:
             _ext = 'png'
         if 'float' in device:
@@ -626,11 +605,11 @@ def main():
                 _set_seed(args.seeds[attempt])
                 T.load_image(picpath)
                 if args.prnu == 'extract':
-                    T.load_prnu(device, policy=args.prnu)
+                    T.load_prnu(device)
 
-                T.build_model(gamma=args.gamma)
+                T.build_model()
 
-                T.build_mask(strategy=args.mask_strategy, sigma=args.edges_sigma)
+                T.build_mask()
                 T.attempt = attempt
                 T.optimize()
                 if args.nccw == 'end':  # compute NCC on CPU at the end of the optimization

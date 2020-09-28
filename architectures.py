@@ -2,9 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from collections import OrderedDict
-from utils.pytorch_ssim import SSIM
-from perceptual_loss import PerceptualLoss
-import functools
+from utils.ssim_torch import SSIM
+from utils.perceptual_loss import PerceptualLoss
 
 
 class Downsampler(nn.Module):
@@ -616,6 +615,15 @@ class TVLoss(nn.Module):
 SSIMLoss = SSIM
 
 PercLoss = PerceptualLoss
+
+
+class L1Norm(nn.L1Loss):
+    def __init__(self, weight=1):
+        super(L1Norm, self).__init__()
+        self.weight = weight
+
+    def forward(self, x):
+        return self.weight * super(L1Norm, self).forward(x, torch.zeros(x.shape, dtype=x.dtype, device=x.device))
 
 
 # MultiResUNet

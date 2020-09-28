@@ -1,8 +1,8 @@
 *.DS_Store
 .idea/
-dataset/
+dataset*/
+vision/
 literature/
-script_ispl/
-script_cineca/
+script/
 *.pth
 *.pkl
