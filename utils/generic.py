@@ -1,29 +1,14 @@
-"""
-@Author: Francesco Picetti - francesco.picetti@polimi.it
-"""
 import numpy as np
 import os
 from socket import gethostname
-
+from typing import Union
+from pathlib import Path
+import json
+from argparse import Namespace
 import random
 import string
 from PIL import Image
 from GPUtil import getFirstAvailable, getGPUs
-from .processing import normalize
-
-
-def set_data_path(host='polimi'):
-    if host == 'polimi':
-        data_path = '/nas/home/fpicetti/geophysics/datasets'
-    elif host == 'cineca':
-        data_path = '/gpfs/scratch/usera06ptm/a06ptm04/fpicetti/datasets'
-    else:
-        raise ValueError('host name not recognized!')
-    return data_path
-
-
-def log10plot(in_content):
-    return np.log10(np.asarray(in_content) / in_content[0])
 
 
 def ten_digit(number):
@@ -44,50 +29,11 @@ def machine_name():
     return gethostname()
 
 
-def idle_cpu_count(mincpu=1):
-    # the load is computed over the last 1 minute
-    idle = int(os.cpu_count() - np.floor(os.getloadavg()[0]))
-    return max(mincpu, idle)
+def read_image(filename):
+    return np.asarray(Image.open(filename))
 
 
-def plot2pgf(temp, filename, folder='./'):
-    """
-    :param temp:        list of equally-long data
-    :param filename:    filename without extension nor path
-    :param folder:      folder where to save
-    """
-    if len(temp) == 1:  # if used as plt.plot(y) without the abscissa axis
-        temp = [list(range(len(temp[0]))), temp[0]]
-
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-    np.savetxt(os.path.join(folder, filename + '.txt'), np.asarray(temp).T,
-               fmt="%f", encoding='ascii')
-
-
-def save_image(in_content, filename, clim=(None, None), folder='./'):
-    """
-    Save a gray-scale PNG image of the 2D content
-    
-    :param in_content:  2D np.ndarray
-    :param filename:    name of the output file (without extension)
-    :param clim:        tuple for color clipping (as done in matplotlib.pyplot.imshow)
-    :param folder:      output directory
-    :return:
-    """
-    if clim[0] and clim[1] is not None:
-        in_content = np.clip(in_content, clim[0], clim[1])
-        in_content = normalize(in_content, in_min=clim[0], in_max=clim[1])[0]
-    else:
-        in_content = normalize(in_content)[0]
-    out = Image.fromarray(((in_content + 1) / 2 * 255).astype(np.uint8))
-
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-    out.save(os.path.join(folder, filename + '.png'))
-
-
-def sec2time(seconds):
+def sec2time(seconds: float) -> str:
     s = seconds % 60
     m = (seconds // 60) % 60
     h = seconds // 3600
@@ -95,22 +41,24 @@ def sec2time(seconds):
     return timestamp
 
 
-def nextpow2(x):
-    return int(2 ** np.ceil(np.log2(x)))
+def time2sec(timestamp: str) -> int:
+    h, m, s = timestamp.split(":")
+    h = int(h.replace("h", "")) * 3600
+    m = int(m.replace("m", "")) * 60
+    s = int(s.replace("s", ""))
+    return h + m + s
 
 
-def spectrum(in_content, nfft=None):
-    """
-    Spectrum computed along the first dimension and then averaged along the other dimensions
-    
-    :param in_content:  numpy.ndarray
-    :param nfft:        number of frequency bin for FFT computation (default nexpow2)
-    :return: averaged spectrum
-    """
-    if nfft is None:
-        nfft = nextpow2(in_content.shape[0])
-    return np.mean(np.fft.fft(in_content, nfft, axis=0),
-                   axis=tuple([i for i in range(1, len(in_content.shape))]))
+def read_args(filename: Union[str, Path]) -> Namespace:
+    args = Namespace()
+    with open(filename, 'r') as fp:
+        args.__dict__.update(json.load(fp))
+    return args
+
+
+def write_args(filename: Union[str, Path], args: Namespace, indent: int = 2) -> None:
+    with open(filename, 'w') as fp:
+        json.dump(args.__dict__, fp, indent=indent)
 
 
 def set_gpu(id=-1):
@@ -135,3 +83,8 @@ def set_gpu(id=-1):
 
         print('GPU selected: %d - %s' % (device, name))
         os.environ["CUDA_VISIBLE_DEVICES"] = str(device)
+
+
+def get_gpu_name(id: int) -> str:
+    name = getGPUs()[id].name
+    return '%s (%d)' % (name, id)

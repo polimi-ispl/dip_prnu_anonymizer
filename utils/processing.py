@@ -1,55 +1,8 @@
 import numpy as np
 import torch
-from .prnu import _rgb2gray
+from .prnu import rgb2gray
 from skimage.feature import canny
 from skimage.morphology import binary_dilation
-
-
-def clim(in_content, ratio, zero_mean=True):
-    """
-    Compute the lower-bound and upper-bound `clim` tuple as a percentage
-    of the content dynamic range.
-
-    :param in_content:  np.ndarray
-    :param ratio:       float, percentage for the dynamic range (default 1.)
-    :param zero_mean:   bool, use symmetric bounds (default True)
-    :return: clim tuple (as required by matplotlib.pyplot.imshow)
-    """
-    if zero_mean:
-        max_abs_value = np.max(np.abs(in_content))
-        return -ratio * max_abs_value, ratio * max_abs_value
-    else:
-        return ratio * in_content.min(), ratio * in_content.max()
-
-
-def clip_normalize_power(x, mymin, mymax, p):
-    """
-    Preprocessing function to be applied to migrated images in the C2F scenario
-
-    :param x:       data to be processed
-    :param mymin:   min value for clipping
-    :param mymax:   max value for clipping
-    :param p:       exponent for the power function
-    :return:
-    """
-    x = np.clip(x, a_min=mymin, a_max=mymax)
-    x, _, _ = normalize(x)
-    x = np.sign(x) * np.power(np.abs(x), p)
-    return x
-
-
-def clip_normalize_power_inverse(x, mymin, mymax, p):
-    """
-    Inverse preprocessing function to be applied to output images in the C2F scenario
-    :param x: data to be processed
-    :param mymin: min value used for clipping
-    :param mymax: max value used for clipping
-    :param p: exponent for the power function (to be inverted)
-    :return:
-    """
-    x = np.sign(x) * np.power(np.abs(x), 1 / p)
-    x = denormalize(x, mymin, mymax)
-    return x
 
 
 def normalize(x, in_min=None, in_max=None, zero_mean=True):
@@ -88,11 +41,15 @@ def numpy2torch(in_content, dtype=torch.FloatTensor):
     return torch.from_numpy(in_content).type(dtype)
 
 
-def float2png(img: torch.Tensor or np.ndarray) -> torch.Tensor or np.ndarray:
+def float2png(img):
+    return float2uint8(255 * img)
+
+
+def float2uint8(img: torch.Tensor or np.ndarray) -> torch.Tensor or np.ndarray:
     if isinstance(img, np.ndarray):
-        return np.clip((255 * img), 0, 255).astype(np.uint8)
+        return np.clip(img, 0, 255).astype(np.uint8)
     else:
-        return torch.clamp(img * 255, 0, 255).byte()
+        return torch.clamp(img, 0, 255).byte()
 
 
 def png2float(img: torch.Tensor or np.ndarray) -> torch.Tensor or np.ndarray:
@@ -106,7 +63,7 @@ def rgb2gray(in_content: np.ndarray or torch.Tensor, color_channel: int = -1):
     if isinstance(in_content, np.ndarray):
         if color_channel != -1:
             in_content = np.swapaxes(in_content, color_channel, -1)
-        return _rgb2gray(in_content)
+        return rgb2gray(in_content)
 
     rgb2gray_vector = torch.Tensor([0.29893602, 0.58704307, 0.11402090]).type(in_content.dtype).to(in_content.device)
 

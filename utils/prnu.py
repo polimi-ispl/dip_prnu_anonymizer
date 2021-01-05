@@ -39,7 +39,7 @@ def extract_single(im: np.ndarray,
     """
 
     W = noise_extract(im, levels, sigma)
-    W = _rgb2gray(W)
+    W = rgb2gray(W)
     W = zero_mean_total(W)
     W_std = W.std(ddof=1) if wdft_sigma == 0 else wdft_sigma
     W = wiener_dft(W, W_std).astype(np.float32)
@@ -131,7 +131,7 @@ def noise_extract_pool(args):
     :return: residual
     """
     w = noise_extract(*args)
-    w = _rgb2gray(w)
+    w = rgb2gray(w)
     w = zero_mean_total(w)
     w_std = w.std(ddof=1)
     w = wiener_dft(w, w_std).astype(np.float32)
@@ -219,7 +219,7 @@ def extract_multiple_aligned(imgs: list, levels: int = 4, sigma: float = 5, proc
             NN += (inten_scale(im) * saturation(im)) ** 2
 
     K = RPsum / (NN + 1)
-    K = _rgb2gray(K)
+    K = rgb2gray(K)
     K = zero_mean_total(K)
     K = wiener_dft(K, K.std(ddof=1)).astype(np.float32)
 
@@ -323,7 +323,7 @@ def zero_mean_total(im: np.ndarray) -> np.ndarray:
     return im
 
 
-def _rgb2gray(im: np.ndarray) -> np.ndarray:
+def rgb2gray(im: np.ndarray) -> np.ndarray:
     """
     RGB to gray as from Binghamton toolbox.
     :param im: multidimensional array

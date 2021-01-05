@@ -45,7 +45,7 @@ for dev_idx, dev in enumerate(devices):
         psnr_array = np.asarray(psnr_list)
         psnr_ascending = psnr_array[idx_ascending_psnr]   # psnr in ascending order.
 
-        ncc_list = result['history']['ncc_w']
+        ncc_list = result['history']['ncc']
         ncc_ascending_psnr = np.asarray(ncc_list)[idx_ascending_psnr]  # ncc with the same order of psnr.
 
         # loop over psnr.
