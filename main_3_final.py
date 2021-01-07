@@ -3,9 +3,10 @@
 import numpy as np
 import h5py
 import argparse
-from utils.patch_extractor import PatchExtractor
 from multiprocessing import Pool
 from PIL import Image
+from termcolor import colored
+import utils as u
 
 
 def sort_nccs_block(ncc_block, psnr_idx_ok):
@@ -59,9 +60,9 @@ def main():
                         help='path to the run file')
     parser.add_argument('--block', type=int, required=True,
                         help='Square block size for the post-processing computation')
-    parser.add_argument('--firstL', type=int, required=True,
+    parser.add_argument('--num_blocks', type=int, required=True,
                         help='first L blocks to be averaged in the post-processing computation')
-    parser.add_argument('--tauPsnr', type=int, required=True,
+    parser.add_argument('--psnr_thresh', type=float, required=True,
                         help='PSNR threshold for selecting the images')
     config, _ = parser.parse_known_args()
 
@@ -73,16 +74,20 @@ def main():
         data = list(f[a_group_key])
 
     # load PSNRs and NCCs
-    run_dict = np.load(config.run + '.npy', allow_pickle=True).tolist()
+    run_dict = np.load(config.run + '.npy', allow_pickle=True).item()
     psnrs = run_dict['history']['psnr']
-    nccs = run_dict['history'][f"ncc_block{config.block}"]
+    try:
+        nccs = run_dict['history'][f"ncc_block{config.block}"]
+    except KeyError:
+        raise KeyError(f"Block {config.block} is not in the results file, "
+                       f"please run main_2_blocks.py with the desired value")
 
-    # select only image indices with PSNR >= tauPsnr
-    psnr_idx_ok = np.where(psnrs >= np.min([np.max(psnrs), config.tauPsnr]))[0]
+    # select only image indices with PSNR >= thresh
+    psnr_idx_ok = np.where(psnrs >= np.min([np.max(psnrs), config.psnr_thresh]))[0]
 
     ############################################ Extract blocks from images ############################################
 
-    pe = PatchExtractor(dim=(1, config.block, config.block), stride=(1, config.block, config.block))
+    pe = u.PatchExtractor(dim=(1, config.block, config.block), stride=(1, config.block, config.block))
 
     # initialize the array containing the image color blocks
     images_color_blocks = np.zeros((len(data), (data[0].shape[0] // config.block) ** 2, config.block, config.block, 3),
@@ -121,15 +126,15 @@ def main():
     ####################################### Generate the final anonymized image ########################################
 
     # define a new Patch extractor for image reconstruction
-    pe1 = PatchExtractor(dim=(1, config.block, config.block), stride=(1, config.block, config.block))
+    pe1 = u.PatchExtractor(dim=(1, config.block, config.block), stride=(1, config.block, config.block))
     # aux variable (needed for image reconstruction)
     aux = pe1.extract(data[0][:, :, 0].reshape((1, 512, 512)))
 
     # average at most firstL blocks
-    if nccs_best_idx_ordered.shape[0] < config.firstL:
+    if nccs_best_idx_ordered.shape[0] < config.num_blocks:
         nccs_firstL_idx = nccs_best_idx_ordered
     else:
-        nccs_firstL_idx = nccs_best_idx_ordered[:config.firstL, :]
+        nccs_firstL_idx = nccs_best_idx_ordered[:config.num_blocks, :]
 
     img_firstL = []
     best_blocks = np.zeros((nccs_firstL_idx.shape[0], images_color_blocks.shape[1], images_color_blocks.shape[2],
@@ -152,13 +157,14 @@ def main():
     avg_firstL = np.mean(img_firstL, axis=0)
     # final anonymized image (uint8)
     anonymized_img = np.clip(avg_firstL, 0, 255).astype(np.uint8)
+    anonymized_psnr = u.psnr(u.float2png(run_dict['image']), anonymized_img)
+    anonymized_ncc = u.ncc(u.prnu.extract_single(anonymized_img, sigma=3), run_dict['prnu4ncc'])
 
     # save the resulting image:
     final_image = Image.fromarray(anonymized_img)
     image_name = config.run + '.png'
     final_image.save(image_name, "PNG")
-
-    return 0
+    print(colored(f"Anonymized saved to {image_name}\n\tPSNR = %+2.2f dB\n\tNCC  = %+.6f" % (anonymized_psnr, anonymized_ncc), "yellow"))
 
 
 if __name__ == '__main__':
