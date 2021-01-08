@@ -3,7 +3,7 @@
 
 
 This is the official repository of **DIPPAS: A Deep Image Prior PRNU Anonymization Scheme**,
-submitted to IEEE Transaction on Information Forensics and Security and currently available on [arXiv](https://arxiv.org/pdf/2012.03581.pdf).
+submitted to IEEE Transactions on Information Forensics and Security and currently available on [arXiv](https://arxiv.org/pdf/2012.03581.pdf).
 
 ## Code
 
