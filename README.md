@@ -1,5 +1,5 @@
 # DIPPAS: A Deep Image Prior PRNU Anonymization Scheme
-<img src="assets/dip_scheme.pdf" width="500">
+<img src="assets/dip_scheme.png" width="500">
 
 
 This is the official repository of **DIPPAS: A Deep Image Prior PRNU Anonymization Scheme**,
