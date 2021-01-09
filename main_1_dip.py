@@ -39,7 +39,7 @@ class Training:
             self.DnCNN = a.DnCNN().type(dtype)
 
         # training parameters
-        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc': [], 'dncnn': [], 'lr': [], 'gamma': []}
+        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc': [], 'lr': [], 'gamma': []}
         self.iiter = 0
 
         # data
@@ -76,8 +76,7 @@ class Training:
         self.additional_noise_tensor = self.input_tensor.detach().clone()
 
     def build_model(self):
-        gamma = self.args.gamma
-        if gamma is None:
+        if self.args.gamma is None:  # gamma is estimated by the architecture
             self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
                                                         num_output_channels=self.img_shape[-1],
                                                         num_channels_down=self.args.filters,
@@ -93,7 +92,7 @@ class Training:
                                                         ).type(self.dtype),
                                            self.prnu_injection_tensor,
                                            gamma_init=self.args.gamma_init)
-        else:
+        else:  #gamma is fixed by the user
             self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
                                     num_output_channels=self.img_shape[-1],
                                     num_channels_down=self.args.filters,
@@ -173,28 +172,15 @@ class Training:
         else:  # gamma is fixed by the user
             mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_injection_tensor, weight=self.args.gamma), self.img_tensor)
 
-        # compute DnCNN-predicted fingerprint
-        if self.args.dncnn > 0.:
-            output_dncnn = self.DnCNN(u.rgb2gray(output_tensor, 1))
-
         # compute loss
-        loss_dncnn = u.ncc(self.prnu_4ncc_tensor * u.rgb2gray(output_tensor, 1), output_dncnn) if self.args.dncnn else 0.
-        loss_ssim = (1 - self.ssim(output_tensor, self.img_tensor)) if self.args.ssim else 0.
-
-        total_loss = mse + self.args.ssim * loss_ssim + self.args.dncnn * loss_dncnn
-        total_loss.backward()
+        mse.backward()
 
         # Save and display loss terms
-        self.history['loss'].append(total_loss.item())
-        msg = "\tPicture %s, Iter %s, Loss=%.2e, MSE=%.2e" \
+        self.history['loss'].append(mse.item())
+        msg = "\tPicture %s, Iter %s, Loss=%.2e" \
               % (self.imgpath.split('/')[-1],
                  str(self.iiter + 1).zfill(u.ten_digit(self.args.epochs)),
-                 self.history['loss'][-1],
-                 mse.item())
-
-        if self.args.dncnn:
-            self.history['dncnn'].append(loss_dncnn.item())
-            msg += ', DnCNN = %+.4f' % self.history['dncnn'][-1]
+                 self.history['loss'][-1])
 
         # Save and display evaluation metrics
         self.history['psnr'].append(u.psnr(u.float2png(output_tensor),
@@ -234,7 +220,7 @@ class Training:
 
         self.iiter += 1
 
-        return total_loss, exit_flag
+        return mse, exit_flag
 
     def _build_scheduler(self, optimizer):
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min',
@@ -336,7 +322,7 @@ class Training:
         torch.cuda.empty_cache()
         self._build_input()
         self.build_model()
-        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc': [], 'dncnn': [], 'lr': [], 'gamma': []}
+        self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc': [], 'lr': [], 'gamma': []}
         self.out_list = []
         self.optimizer = None
         self.scheduler = None
@@ -392,16 +378,12 @@ def _parse_args():
                         help='LR threshold for Plateau scheduler')
     parser.add_argument('--lr_patience', type=int, default=10, required=False,
                         help='LR patience for Plateau scheduler')
-    # loss
-    parser.add_argument('--ssim', type=float, required=False, default=0.00,
-                        help='Coefficient for the SSIM loss')
-    parser.add_argument('--dncnn', type=float, required=False, default=0.00,
-                        help='Coefficient for the DnCNN fingerprint extraction loss')
+    # gamma
     parser.add_argument('--gamma', type=float, required=False,
                         help='Fix PRNU injection coefficient')
-    parser.add_argument('--gamma_init', type=float, required=False,
-                        help='Init value for gamma layer [None default - random]')
-    parser.add_argument('--gamma_positive', default=False, action='store_true',
+    parser.add_argument('--gamma_init', type=float, required=False, default=0.,
+                        help='Init value for gamma layer [None for random]')
+    parser.add_argument('--gamma_positive', type=bool, required=False, default=True,
                         help='Clamp PRNU injection weight to be positive')
     # deep prior strategies
     parser.add_argument('--param_noise', action='store_true', default=False,
