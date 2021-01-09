@@ -58,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run', type=str, required=True,
                         help='path to the run file')
-    parser.add_argument('--block', type=int, required=True,
+    parser.add_argument('--block_size', type=int, required=True,
                         help='Square block size for the post-processing computation')
     parser.add_argument('--num_blocks', type=int, required=True,
                         help='first L blocks to be averaged in the post-processing computation')
@@ -77,9 +77,9 @@ def main():
     run_dict = np.load(config.run + '.npy', allow_pickle=True).item()
     psnrs = run_dict['history']['psnr']
     try:
-        nccs = run_dict['history'][f"ncc_block{config.block}"]
+        nccs = run_dict['history'][f"ncc_block{config.block_size}"]
     except KeyError:
-        raise KeyError(f"Block {config.block} is not in the results file, "
+        raise KeyError(f"Block {config.block_size} is not in the results file, "
                        f"please run main_2_blocks.py with the desired value")
 
     # select only image indices with PSNR >= thresh
@@ -87,10 +87,10 @@ def main():
 
     ############################################ Extract blocks from images ############################################
 
-    pe = u.PatchExtractor(dim=(1, config.block, config.block), stride=(1, config.block, config.block))
+    pe = u.PatchExtractor(dim=(1, config.block_size, config.block_size), stride=(1, config.block_size, config.block_size))
 
     # initialize the array containing the image color blocks
-    images_color_blocks = np.zeros((len(data), (data[0].shape[0] // config.block) ** 2, config.block, config.block, 3),
+    images_color_blocks = np.zeros((len(data), (data[0].shape[0] // config.block_size) ** 2, config.block_size, config.block_size, 3),
                                    dtype='uint8')
     # loop over the three color channels
     for ch in range(3):
@@ -126,7 +126,7 @@ def main():
     ####################################### Generate the final anonymized image ########################################
 
     # define a new Patch extractor for image reconstruction
-    pe1 = u.PatchExtractor(dim=(1, config.block, config.block), stride=(1, config.block, config.block))
+    pe1 = u.PatchExtractor(dim=(1, config.block_size, config.block_size), stride=(1, config.block_size, config.block_size))
     # aux variable (needed for image reconstruction)
     aux = pe1.extract(data[0][:, :, 0].reshape((1, 512, 512)))
 
@@ -148,7 +148,7 @@ def main():
         for ch in range(3):
             img_rec[:, :, ch] = pe1.reconstruct(
                 best_blocks[n_it, :, :, :, ch].reshape(
-                    (1, patch_n, patch_n, 1, config.block, config.block))).squeeze()
+                    (1, patch_n, patch_n, 1, config.block_size, config.block_size))).squeeze()
         img_firstL.append(img_rec)
 
     del best_blocks

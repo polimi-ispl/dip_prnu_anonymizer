@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--run', type=str, required=True,
                         help='path to the run file')
-    parser.add_argument('--block', type=int, required=True,
+    parser.add_argument('--block_size', type=int, required=True,
                         help='Square block size for the post-processing computation')
     args = parser.parse_args()
 
@@ -60,7 +60,7 @@ if __name__ == '__main__':
             n_iter = len(images_uint8)
 
         # extract blocks
-        pe = u.PatchExtractor(dim=(1, args.block, args.block), stride=(1, args.block, args.block))
+        pe = u.PatchExtractor(dim=(1, args.block_size, args.block_size), stride=(1, args.block_size, args.block_size))
 
         prnu_blocks = pe.extract(run_dict['prnu4ncc'][None]).reshape((-1,) + pe.dim[1:])
 
@@ -82,5 +82,5 @@ if __name__ == '__main__':
             del ncc_map
 
         # save NCCs into the same run .npy file
-        run_dict['history'][f"ncc_block{args.block}"] = np.asarray(ncc_block)
+        run_dict['history'][f"ncc_block{args.block_size}"] = np.asarray(ncc_block)
         np.save(run_name + '.npy', run_dict)
