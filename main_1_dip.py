@@ -131,19 +131,19 @@ class Training:
 
     def load_prnu(self, device_path):
         # fingerprint to be added to the output
-        if self.args.prnu == 'clean':
+        if self.args.prnu == 'aware':
             self.prnu_injection = np.load(os.path.join(device_path, 'prnu.npy'))
-        elif self.args.prnu == 'extract':
+        elif self.args.prnu == 'blind':
             assert self.img is not None, 'No image has been loaded'
             if 'float' in device_path:
                 self.prnu_injection = u.prnu.extract_single(self.img, sigma=3 / 255)
             else:
                 self.prnu_injection = u.prnu.extract_single(u.float2png(self.img), sigma=3)
         else:
-            raise ValueError('PRNU policy has to be clean, wiener or extract')
+            raise ValueError('PRNU policy has to be either aware or blind')
 
         if self.prnu_injection.shape != self.img_shape[:2]:
-            raise ValueError('The loaded clean PRNU shape has to be', self.img_shape[:2])
+            raise ValueError('The loaded PRNU shape has to be', self.img_shape[:2])
         self.prnu_injection_tensor = u.numpy2torch(self.prnu_injection[np.newaxis, np.newaxis]).to(self.dev)
 
         # Reference PRNU for computing the NCC
@@ -414,9 +414,9 @@ def _parse_args():
                         help='Standard deviation of the noise for the input tensor')
     parser.add_argument('--psnr_max', type=float, required=False, default=39.,
                         help='Maximum PSNR for stopping the optimization')
-    parser.add_argument('--prnu', type=str, default='clean', required=False,
-                        choices=['clean', 'extract'],
-                        help='Which PRNU to inject: clean or extracted from the picture')
+    parser.add_argument('--prnu', type=str, default='aware', required=False,
+                        choices=['aware', 'blind'],
+                        help='PRNU injection strategy')
 
     args = parser.parse_args()
     if args.ncc == 'skip':
@@ -454,7 +454,7 @@ def main():
         print(colored('Device %s' % device.split('/')[-1], 'yellow'))
 
         # load fingerprint if not extracted from the image itself
-        if args.prnu != 'extract':
+        if args.prnu != 'blind':
             T.load_prnu(device)
 
         pic_list = sorted(glob(os.path.join(device, '*')))
@@ -466,7 +466,7 @@ def main():
                 break
             T.load_image(picpath)
 
-            if args.prnu == 'extract':
+            if args.prnu == 'blind':
                 T.load_prnu(device)
 
             T.build_model()
