@@ -42,24 +42,24 @@ The proposed anonymization scheme relies on three steps:
 1. `main_1_dip.py` is responsible for the deep prior inversion. 
     For each image, it constructs the inverse problem and solve it iteratively.
     The output images obtained at the different iterations are stored in a hdf5 file, along with a npy file containing the inversion hyperparameters and history.
-    The user has a lot of choices: different objective functions, schedulers, strategies, and so on.
-    @ Fra: lascerei l'objective function del paper, non dobbiamo aggiungere cose in pi§, rischiamo di far confusione e pestarci i piedi da soli se i revisori le vedono.
-    Check out the parameters in the file with `python main_1_dip.py --help`
+    The user has a lot of choices; check out the parameters with `python main_1_dip.py --help`
 
-    Basic example on the provided dataset:
+    Basic example on the provided dataset, using the PRNU-aware strategy and skipping the NCC computation (that will be performed in the next step):
     @ Fra: 
-    - prnu clean non vuol dire niente per la comunità, meglio sostituire con --prnu aware/blind ad esempio
     - perchè gli stiamo passando il valore di gamma? non dovrebbe essere incluso nella rete? nel paper abbiamo scritto cosi
+    @ Sara:
+        Avevamo fatto degli esperimenti; gamma fissato, gamma stimato dalla rete (positivo), e alla fine abbiamo lasciato gamma positivo inizializzato a 0.
+        Io lo lascerei come parametro, almeno in geofisica fanno sempre una domanda su gamma; ma se vuoi lo togliamo. Comandami, mia signora! 
     
     ```bash
-    $ python main_1_dip.py --epochs 2000 --gamma 1. --prnu clean --ncc skip --outpath results
+    $ python main_1_dip.py --epochs 2000 --prnu aware --ncc skip --outpath my_run_folder
     ```
 
 2. After the inversion is done, `main_2_blocks.npy` computes the NCC with the device PRNU over squared blocks extracted from each output image produced at step  1.
     
     To extract blocks of 64x64 samples from the previous results, simply do:
     ```bash
-    $ python main_2_blocks.py --run results --block 64
+    $ python main_2_blocks.py --run my_run_folder/IMG_NAME --block_size 64
     ```
 
 3. `main_3_final.npy` generates the final anonymized image.
@@ -67,7 +67,7 @@ The proposed anonymization scheme relies on three steps:
     These blocks are averaged together, and the final image is then assembled from the blocks. 
     
     ```bash
-    $ python main_3_final.py --run results --block 64 --num_blocks 50 --psnr_thresh 37.
+    $ python main_3_final.py --run my_run_folder --block_size 64 --num_blocks 50 --psnr_thresh 37.
     ```
 
 ## Credits
