@@ -61,7 +61,7 @@ The proposed anonymization scheme relies on three steps:
     These blocks are averaged together, and the final image is then assembled from the blocks. 
     
     ```bash
-    $ python main_3_final.py --run my_run_folder --block_size 64 --num_blocks 50 --psnr_thresh 37.
+    $ python main_3_final.py --run my_run_folder/IMG_NAME --block_size 64 --num_blocks 50 --psnr_thresh 37.
     ```
 
 ## Credits
