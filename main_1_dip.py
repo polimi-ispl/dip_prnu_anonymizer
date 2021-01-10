@@ -76,34 +76,21 @@ class Training:
         self.additional_noise_tensor = self.input_tensor.detach().clone()
 
     def build_model(self):
-        if self.args.gamma is None:  # gamma is estimated by the architecture
-            self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
-                                                        num_output_channels=self.img_shape[-1],
-                                                        num_channels_down=self.args.filters,
-                                                        num_channels_up=self.args.filters,
-                                                        num_channels_skip=self.args.skip,
-                                                        upsample_mode=self.args.upsample,  # default is bilinear
-                                                        need_sigmoid=self.args.need_sigmoid,
-                                                        need_bias=True,
-                                                        pad=self.args.pad,
-                                                        # default is reflection, but Fantong uses zero
-                                                        act_fun=self.args.activation
-                                                        # default is LeakyReLU).type(self.dtype)
-                                                        ).type(self.dtype),
-                                           self.prnu_injection_tensor,
-                                           gamma_init=self.args.gamma_init)
-        else:  #gamma is fixed by the user
-            self.net = a.MulResUnet(num_input_channels=self.args.input_depth,
-                                    num_output_channels=self.img_shape[-1],
-                                    num_channels_down=self.args.filters,
-                                    num_channels_up=self.args.filters,
-                                    num_channels_skip=self.args.skip,
-                                    upsample_mode=self.args.upsample,  # default is bilinear
-                                    need_sigmoid=self.args.need_sigmoid,
-                                    need_bias=True,
-                                    pad=self.args.pad,  # default is reflection, but Fantong uses zero
-                                    act_fun=self.args.activation  # default is LeakyReLU).type(self.dtype)
-                                    ).type(self.dtype)
+        self.net = a.MultiResInjection(a.MulResUnet(num_input_channels=self.args.input_depth,
+                                                    num_output_channels=self.img_shape[-1],
+                                                    num_channels_down=self.args.filters,
+                                                    num_channels_up=self.args.filters,
+                                                    num_channels_skip=self.args.skip,
+                                                    upsample_mode=self.args.upsample,  # default is bilinear
+                                                    need_sigmoid=self.args.need_sigmoid,
+                                                    need_bias=True,
+                                                    pad=self.args.pad,
+                                                    # default is reflection, but Fantong uses zero
+                                                    act_fun=self.args.activation
+                                                    # default is LeakyReLU).type(self.dtype)
+                                                    ).type(self.dtype),
+                                       self.prnu_injection_tensor,
+                                       gamma_init=0.)
 
         self.parameters = a.get_params('net', self.net, self.input_tensor)
 
@@ -164,15 +151,8 @@ class Training:
         # compute output
         output_tensor = self.net(input_tensor)
 
-        # estimate the gamma parameter
-        if self.args.gamma is None:  # gamma is estimated by the net
-            mse = self.l2dist(output_tensor, self.img_tensor)
-        elif self.args.gamma == 0.:  # no PRNU is injected
-            mse = self.l2dist(output_tensor, self.img_tensor)
-        else:  # gamma is fixed by the user
-            mse = self.l2dist(u.add_prnu(output_tensor, self.prnu_injection_tensor, weight=self.args.gamma), self.img_tensor)
-
         # compute loss
+        mse = self.l2dist(output_tensor, self.img_tensor)
         mse.backward()
 
         # Save and display loss terms
@@ -193,10 +173,7 @@ class Training:
         self.history['lr'].append(self.optimizer.param_groups[0]['lr'])
 
         # Save gamma and output image
-        if self.args.gamma is None:
-            self.history['gamma'].append(float(self.net.prnu_injection.weight.detach().cpu().numpy().squeeze()))
-        else:
-            self.history['gamma'].append(self.args.gamma)
+        self.history['gamma'].append(float(self.net.prnu_injection.weight.detach().cpu().numpy().squeeze()))
 
         if 'float' in self.imgpath:
             out_img = np.swapaxes(u.torch2numpy(output_tensor).squeeze(), 0, -1)
@@ -261,9 +238,9 @@ class Training:
                 self.optimizer.step()
                 if self.scheduler:
                     self.scheduler.step(loss)
-                if self.args.gamma_positive:
-                    with torch.set_grad_enabled(False):
-                        self.net.prnu_injection.weight.clamp_(0)
+                # force gamma to be positive
+                with torch.set_grad_enabled(False):
+                    self.net.prnu_injection.weight.clamp_(0)
 
         elif self.args.optimizer.lower() == 'sgd':
             self.optimizer = torch.optim.SGD(self.parameters, lr=self.args.lr,
@@ -378,13 +355,6 @@ def _parse_args():
                         help='LR threshold for Plateau scheduler')
     parser.add_argument('--lr_patience', type=int, default=10, required=False,
                         help='LR patience for Plateau scheduler')
-    # gamma
-    parser.add_argument('--gamma', type=float, required=False,
-                        help='Fix PRNU injection coefficient')
-    parser.add_argument('--gamma_init', type=float, required=False, default=0.,
-                        help='Init value for gamma layer [None for random]')
-    parser.add_argument('--gamma_positive', type=bool, required=False, default=True,
-                        help='Clamp PRNU injection weight to be positive')
     # deep prior strategies
     parser.add_argument('--param_noise', action='store_true', default=False,
                         help='Add normal noise to the parameters every epoch')
