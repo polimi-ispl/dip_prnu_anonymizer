@@ -35,7 +35,7 @@ dataset_name
     ...    
 ```
 
-### Train
+### Anonymization scheme
 
 The proposed anonymization scheme relies on three steps:
 
@@ -51,7 +51,7 @@ The proposed anonymization scheme relies on three steps:
 
 2. After the inversion is done, `main_2_blocks.npy` computes the NCC with the device PRNU over squared blocks extracted from each output image produced at step  1.
     
-    To extract blocks of 64x64 samples from the previous results, simply do:
+    To compute the NCC over blocks of 64x64 samples from the previous results, simply do:
     ```bash
     $ python main_2_blocks.py --run my_run_folder/IMG_NAME --block_size 64
     ```
