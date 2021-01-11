@@ -69,3 +69,4 @@ The proposed anonymization scheme relies on three steps:
 - Francesco Picetti (francesco.picetti@polimi.it)
 - Sara Mandelli (sara.mandelli@polimi.it)
 - Paolo Bestagini (paolo.bestagini@polimi.it) 
+- Vincenzo Lipari (vincenzo.lipari@polimi.it)
