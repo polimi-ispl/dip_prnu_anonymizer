@@ -1,8 +1,6 @@
 import numpy as np
 import torch
 from .prnu import rgb2gray
-from skimage.feature import canny
-from skimage.morphology import binary_dilation
 
 
 def normalize(x, in_min=None, in_max=None, zero_mean=True):
@@ -91,48 +89,3 @@ def crop_center(img, cropx, cropy):
     startx = x // 2 - cropx // 2
     starty = y // 2 - cropy // 2
     return img[starty:starty + cropy, startx:startx + cropx, :]
-
-
-def add_prnu(img, k, weight=0.01, to_each_channel=True):
-    if to_each_channel:
-        return img * (1 + weight * k.repeat(1, img.shape[1], 1, 1))
-    else:
-        raise NotImplementedError("For now the PRNU is added to each channel")
-
-
-def extract_edges(img, sigma=3):
-    return binary_dilation(canny(rgb2gray(img), sigma=sigma))
-
-
-def build_mask(img, strategy='all', sigma=3, deletion=0.):
-    """Create a random mask either on the whole image or on the edges or on the flat zones"""
-
-    edges = extract_edges(img, sigma=sigma)
-
-    if strategy == 'edge':
-        rnd = (np.random.rand(np.sum(edges)) > deletion).astype(int)
-        randomized_edge = np.ones_like(edges).astype(int)
-        i = 0
-        for r in range(edges.shape[0]):
-            for c in range(edges.shape[1]):
-                if edges[r, c] == 1:
-                    # print('edge in (%d, %d)' % (r, c))
-                    randomized_edge[r, c] = rnd[i]
-                    i += 1
-
-        mask = randomized_edge.reshape(edges.shape)
-
-    elif strategy == 'flat':
-        mask = (np.random.rand(np.prod(img.shape[:2])) > deletion).astype(int).reshape(img.shape[:2])
-        for r in range(edges.shape[0]):
-            for c in range(edges.shape[1]):
-                if edges[r, c] == 1:
-                    mask[r, c] = 1
-
-    elif strategy == 'all':
-        mask = (np.random.rand(np.prod(img.shape[:2])) > deletion).astype(int).reshape(img.shape[:2])
-
-    else:
-        raise ValueError('Invalid strategy for random mask generation')
-
-    return mask

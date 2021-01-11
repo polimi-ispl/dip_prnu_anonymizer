@@ -15,7 +15,7 @@ submitted to IEEE Transactions on Information Forensics and Security and current
 $ conda env create -f environment.yml
 $ conda activate dippas
 ```
-- The code has beeen tested on Nvidia Tesla P80 and V100 GPUs.
+- The code has been tested on Nvidia Tesla P80 and V100 GPUs.
 
 
 ### Dataset preparation

@@ -6,3 +6,8 @@ literature/
 script/
 *.pth
 *.pkl
+results_save.py
+results_show.py
+mat2npy.py
+spec-file.txt
+main_cg.py
