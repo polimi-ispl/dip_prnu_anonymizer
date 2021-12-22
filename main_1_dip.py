@@ -35,8 +35,6 @@ class Training:
         # losses
         self.l2dist = torch.nn.MSELoss().type(self.dtype)
         self.ssim = a.SSIMLoss().type(self.dtype)
-        if self.args.dncnn > 0.:
-            self.DnCNN = a.DnCNN().type(dtype)
 
         # training parameters
         self.history = {'loss': [], 'psnr': [], 'ssim': [], 'ncc': [], 'lr': [], 'gamma': []}
