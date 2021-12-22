@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from skimage.measure import compare_ssim
+from skimage.metrics import structural_similarity as compare_ssim
 from . import ssim_torch
 
 
@@ -33,6 +33,6 @@ def ncc(k1: torch.Tensor or np.ndarray,
 def ssim(img1: torch.Tensor or np.ndarray,
          img2: torch.Tensor or np.ndarray) -> torch.Tensor or np.ndarray:
     if isinstance(img1, np.ndarray) and isinstance(img2, np.ndarray):
-        return compare_ssim(img1, img2, multichannel=True if img1.shape[-1] == 3 else False)
+        return compare_ssim(img1, img2, multichannel=True if img1.shape[-1] == 3 else False)[0]
     else:
         return ssim_torch.ssim(img1, img2)
