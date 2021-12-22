@@ -70,7 +70,7 @@ def set_gpu(id=-1):
         print('GPU not selected')
     else:
         try:
-            device = id if id is not -1 else getFirstAvailable(order='memory')[0]  # -1 for automatic choice
+            device = id if id != -1 else getFirstAvailable(order='memory')[0]  # -1 for automatic choice
         except RuntimeError:
             print('WARNING! No GPU available, switching to CPU')
             return
