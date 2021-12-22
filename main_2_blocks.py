@@ -30,7 +30,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--run', type=str, required=True,
-                        help='path to the run file')
+                        help='path to the run file, without extension')
     parser.add_argument('--block_size', type=int, required=True,
                         help='Square block size for the post-processing computation')
     args = parser.parse_args()
